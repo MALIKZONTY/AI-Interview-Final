@@ -1,0 +1,14 @@
+{
+  "terminal.integrated.defaultProfile.windows": "PowerShell (refresh PATH)",
+  "terminal.integrated.profiles.windows": {
+    "PowerShell (refresh PATH)": {
+      "source": "PowerShell",
+      "icon": "terminal-powershell",
+      "args": [
+        "-NoExit",
+        "-Command",
+        "$env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')"
+      ]
+    }
+  }
+}
