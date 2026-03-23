@@ -1,0 +1,87 @@
+// Prisma schema for the interview platform — PostgreSQL
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  resumes    Resume[]
+  interviews Interview[]
+}
+
+model Resume {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cloudinaryPublicId String
+  url                String
+  fileName           String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model Interview {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jdText       String?  @db.Text
+  numQuestions Int
+  /// active | processing | completed | failed
+  status       String   @default("draft")
+  overallScore Float?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  questions Question[]
+  result    Result?
+
+  @@index([userId])
+}
+
+model Question {
+  id             String   @id @default(cuid())
+  interviewId    String
+  interview      Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  orderIndex     Int
+  text           String   @db.Text
+  expectedAnswer String   @db.Text
+
+  responses Response[]
+
+  @@unique([interviewId, orderIndex])
+  @@index([interviewId])
+}
+
+model Response {
+  id               String   @id @default(cuid())
+  questionId       String   @unique
+  question         Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  cloudinaryUrl    String?
+  transcript       String?  @db.Text
+  correctnessScore Float?
+  confidenceScore  Float?
+  analysisMeta     Json?
+  createdAt        DateTime @default(now())
+}
+
+/// Aggregated outcome for an interview (one per interview).
+model Result {
+  id             String    @id @default(cuid())
+  interviewId  String    @unique
+  interview      Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  avgCorrectness Float
+  avgConfidence  Float
+  details        Json?
+  createdAt      DateTime  @default(now())
+}
