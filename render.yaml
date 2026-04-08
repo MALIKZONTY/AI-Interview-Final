@@ -1,0 +1,39 @@
+services:
+  # 1. Node.js Backend API
+  - type: web
+    name: ai-interview-api
+    env: node
+    rootDir: apps/api
+    buildCommand: pnpm install && pnpm run build
+    startCommand: pnpm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false # Set in Render Dashboard
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: AI_SERVICE_URL
+        fromService:
+          name: ai-interview-service
+          type: web
+          property: host
+
+  # 2. Python AI Service
+  - type: web
+    name: ai-interview-service
+    env: python
+    rootDir: services/ai-service
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: WHISPER_MODEL_SIZE
+        value: base
