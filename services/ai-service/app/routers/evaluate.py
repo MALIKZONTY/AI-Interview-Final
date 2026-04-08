@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Scores answers using:
 - Correctness: alignment with expected answer AND relevance to the actual question (topic).
@@ -6,13 +7,17 @@ Scores answers using:
 """
 
 import re
+import os
+import json
 from typing import Any
 
 import numpy as np
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+
+from app.parser import client
 
 router = APIRouter()
 
@@ -38,9 +43,55 @@ def _get_embed_model():
 class EvaluateBody(BaseModel):
     question: str
     expected_answer: str
+    acceptable_variants: list[str] = []
+    keywords: list[str] = []
+    evaluation_rubric: dict[str, Any] = {}
     candidate_answer: str
     speech_meta: dict[str, Any] | None = None
     video_meta: dict[str, Any] | None = None
+
+class LLMCorrectnessResult(BaseModel):
+    correctness_score: float = Field(description="Score between 0 and 100")
+    reasoning: str = Field(description="Brief explanation of the score")
+
+async def _llm_correctness(body: EvaluateBody) -> LLMCorrectnessResult | None:
+    """Uses Groq to judge the correctness of the candidate answer based on the rubric."""
+    try:
+        model_name = os.getenv("OPENAI_MODEL", "llama-3.3-70b-versatile")
+        
+        system_prompt = f"""
+        You are an expert technical interviewer. 
+        Evaluate the candidate's answer based on the following context:
+        
+        QUESTION: {body.question}
+        EXPECTED ANSWER: {body.expected_answer}
+        VARIANTS: {", ".join(body.acceptable_variants) if body.acceptable_variants else "None provided"}
+        KEYWORDS TO LOOK FOR: {", ".join(body.keywords) if body.keywords else "None explicitly required"}
+        SPECIFIC RUBRIC: {json.dumps(body.evaluation_rubric)}
+        
+        Compare the CANDIDATE ANSWER below to these requirements.
+        Be encouraging and fair. If the answer covers the core concepts or related technical ideas, award generous partial credit. 
+        Focus on whether the candidate understands the "spirit" of the question even if they miss specific keywords or phrasing.
+        
+        You MUST return ONLY a JSON object with:
+        "correctness_score": (float, 0-100)
+        "reasoning": (string, 1-2 sentences explaining the score based on the rubric)
+        """
+        
+        completion = await client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"CANDIDATE ANSWER: {body.candidate_answer}"}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2
+        )
+        
+        return LLMCorrectnessResult.model_validate_json(completion.choices[0].message.content)
+    except Exception as e:
+        print(f"LLM Evaluation failed: {e}")
+        return None
 
 
 def _tokens(text: str) -> set[str]:
@@ -129,19 +180,43 @@ def _relevance_score(question: str, candidate: str) -> tuple[float, dict[str, fl
     return rel, {"semantic_q": sem_q, "tfidf_q": cos_q, "keyword_q": key_q}
 
 
-def _base_correctness(expected: str, candidate: str) -> tuple[float, dict[str, float | None]]:
-    cos = _cosine_tfidf(expected, candidate)
-    key = _keyword_score(expected, candidate)
-    sem = _semantic_pair(expected, candidate)
-    if sem is not None:
-        base = float(np.clip(0.48 * sem + 0.30 * cos + 0.22 * key, 0, 100))
+def _base_correctness(expected: str, candidate: str, variants: list[str], required_keywords: list[str]) -> tuple[float, dict[str, float | None]]:
+    # 1. Test highest semantic match among expected + variants
+    all_targets = [expected] + [v for v in variants if str(v).strip()]
+    best_sem = 0.0
+    best_cos = 0.0
+    best_key = 0.0
+    
+    for target in all_targets:
+        cos = _cosine_tfidf(target, candidate)
+        key = _keyword_score(target, candidate)
+        sem = _semantic_pair(target, candidate)
+        
+        if sem is not None and sem > best_sem:
+            best_sem = sem
+        if cos > best_cos:
+            best_cos = cos
+        if key > best_key:
+            best_key = key
+            
+    # 2. Check keyword hit rate natively
+    hit_rate = 0.0
+    if required_keywords:
+        cand_lower = candidate.lower()
+        hits = sum(1 for kw in required_keywords if str(kw).lower() in cand_lower)
+        hit_rate = (hits / len(required_keywords)) * 100.0
+
+    if best_sem is not None:
+        # Heavily weight semantics, but ensure keyword hit rate supplements
+        base = float(np.clip(0.40 * best_sem + 0.20 * best_cos + 0.20 * best_key + 0.20 * hit_rate, 0, 100))
     else:
-        base = float(np.clip(0.58 * cos + 0.42 * key, 0, 100))
-    return base, {"semantic": sem, "tfidf": cos, "keyword": key}
+        base = float(np.clip(0.45 * best_cos + 0.35 * best_key + 0.20 * hit_rate, 0, 100))
+        
+    return base, {"semantic": best_sem, "tfidf": best_cos, "keyword": best_key, "keyword_hit_rate": hit_rate}
 
 
 @router.post("/evaluate-answer")
-def evaluate_answer(body: EvaluateBody):
+async def evaluate_answer(body: EvaluateBody):
     cand = (body.candidate_answer or "").strip()
     if not cand:
         return {
@@ -150,18 +225,35 @@ def evaluate_answer(body: EvaluateBody):
             "debug": {"reason": "empty_transcript"},
         }
 
-    base, dbg_exp = _base_correctness(body.expected_answer, cand)
-    relevance, dbg_q = _relevance_score(body.question, cand)
-
-    # Strong gate: high correctness only if the answer relates to the question, not only the rubric
-    if relevance < 22:
-        rel_factor = 0.12 + 0.35 * (relevance / 22.0)
-    elif relevance < 45:
-        rel_factor = 0.47 + 0.40 * ((relevance - 22) / 23.0)
+    # 1. Try LLM Correctness first (High accuracy)
+    llm_res = await _llm_correctness(body)
+    
+    dbg_q = {}
+    if llm_res:
+        correctness = llm_res.correctness_score
+        dbg_exp = {"method": "groq_llm", "reasoning": llm_res.reasoning}
+        relevance = 100.0 # LLM already accounts for relevance
+        rel_factor = 1.0
     else:
-        rel_factor = 0.87 + 0.13 * min(1.0, (relevance - 45) / 55.0)
+        # 2. Fallback to Local AI Heuristics
+        base, dbg_exp = _base_correctness(
+            body.expected_answer, 
+            cand, 
+            body.acceptable_variants, 
+            body.keywords
+        )
+        relevance, dbg_q = _relevance_score(body.question, cand)
+        
+        # Strong gate: high correctness only if the answer relates to the question
+        if relevance < 22:
+            rel_factor = 0.12 + 0.35 * (relevance / 22.0)
+        elif relevance < 45:
+            rel_factor = 0.47 + 0.40 * ((relevance - 22) / 23.0)
+        else:
+            rel_factor = 0.87 + 0.13 * min(1.0, (relevance - 45) / 55.0)
 
-    correctness = float(np.clip(base * rel_factor, 0, 100))
+        correctness = float(np.clip(base * rel_factor, 0, 100))
+        dbg_exp["method"] = "local_heuristics"
 
     vm = body.video_meta or {}
     gaze = float(vm.get("gaze_center_score", vm.get("eye_contact_proxy", 55)))
@@ -239,7 +331,7 @@ def evaluate_answer(body: EvaluateBody):
     r_mot = (max(0.0, motion_signal - 8.5) / 21.0) ** 1.05 * 0.48
     r_std = (max(0.0, std_off - 0.048) / 0.095) ** 1.0 * 0.40
     restlessness = min(1.0, r_pos + r_mot + r_std)
-
+    
     engagement = (eye + gaze) / 200.0
     # Only strong, frontal gaze earns heavy restlessness forgiveness
     if engagement >= 0.68:
@@ -254,11 +346,11 @@ def evaluate_answer(body: EvaluateBody):
             restlessness *= 0.82
     # Low eye contact + clearly restless: drop confidence hard
     if engagement < 0.42 and restlessness > 0.14:
-        restlessness = min(1.0, restlessness * (1.42 + 1.0 * (0.42 - engagement)))
+        restlessness = min(1.0, restlessness * (1.12 + 0.5 * (0.42 - engagement))) # Softened multiplier
     if moving and engagement < 0.58:
-        restlessness = min(1.0, restlessness * 1.18)
-
-    confidence *= max(0.15, 1.0 - 0.82 * restlessness)
+        restlessness = min(1.0, restlessness * 1.08) # Softened
+        
+    confidence *= max(0.45, 1.0 - 0.40 * restlessness) # Softened weight (0.82 -> 0.40) and floor (0.15 -> 0.45)
     confidence = float(np.clip(confidence, 0, 100))
 
     # Softer speech penalties; STT often adds commas / false positives — not true disfluency

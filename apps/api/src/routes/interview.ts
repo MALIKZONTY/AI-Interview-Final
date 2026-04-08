@@ -15,6 +15,7 @@ import { Readable } from "node:stream";
 const startSchema = z.object({
   jdText: z.string().min(10, "Job description is too short"),
   numQuestions: z.number().int().min(1).max(20),
+  difficulty: z.enum(["Easy", "Medium", "Hard"]).optional().default("Medium"),
 });
 
 /**
@@ -26,7 +27,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) {
       return reply.status(400).send({ error: "Invalid body", details: parsed.error.flatten() });
     }
-    const { jdText, numQuestions } = parsed.data;
+    const { jdText, numQuestions, difficulty } = parsed.data;
 
     const resume = await prisma.resume.findUnique({ where: { userId: request.userId } });
     const resumeSummary = resume
@@ -39,6 +40,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
         resumeSummary,
         jdText,
         count: 20,
+        difficulty,
       });
     } catch (e) {
       console.error("AI generate failed", e);
@@ -60,6 +62,9 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
             orderIndex: i,
             text: q.text,
             expectedAnswer: q.expected_answer,
+            acceptableVariants: q.acceptable_variants || [],
+            keywords: q.keywords || [],
+            evaluationRubric: q.evaluation_rubric ? (q.evaluation_rubric as Prisma.InputJsonValue) : {},
           })),
         },
       },
@@ -352,6 +357,9 @@ async function processInterview(interviewId: string): Promise<void> {
         const ev = await aiEvaluateAnswer({
           question: q.text,
           expected_answer: q.expectedAnswer,
+          acceptable_variants: (q.acceptableVariants as string[]) || [],
+          keywords: (q.keywords as string[]) || [],
+          evaluation_rubric: (q.evaluationRubric as Record<string, unknown>) || {},
           candidate_answer: transcript,
           video_meta: videoMeta,
         });
@@ -377,7 +385,7 @@ async function processInterview(interviewId: string): Promise<void> {
       scores.length > 0 ? scores.reduce((a, s) => a + s.c, 0) / scores.length : 0;
     const avgF =
       scores.length > 0 ? scores.reduce((a, s) => a + s.f, 0) / scores.length : 0;
-    const overall = (avgC + avgF) / 2;
+    const overall = (avgC * 0.7) + (avgF * 0.3);
 
     await prisma.result.upsert({
       where: { interviewId },

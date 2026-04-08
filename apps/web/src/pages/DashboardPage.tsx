@@ -35,6 +35,7 @@ export function DashboardPage() {
   const [uploading, setUploading] = useState(false);
   const [jdText, setJdText] = useState("");
   const [numQuestions, setNumQuestions] = useState(5);
+  const [difficulty, setDifficulty] = useState("Medium");
   const [starting, setStarting] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
@@ -101,7 +102,7 @@ export function DashboardPage() {
       const { data } = await api.post<{
         interviewId: string;
         questions: { id: string; orderIndex: number; text: string }[];
-      }>("/interview/start", { jdText, numQuestions });
+      }>("/interview/start", { jdText, numQuestions, difficulty });
       setSession({
         interviewId: data.interviewId,
         questions: data.questions,
@@ -237,6 +238,19 @@ export function DashboardPage() {
                     The system generates 20 questions server-side; we use the first {numQuestions}{" "}
                     for this run.
                   </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="difficulty">Difficulty Level</Label>
+                  <select
+                    id="difficulty"
+                    value={difficulty}
+                    onChange={(e) => setDifficulty(e.target.value)}
+                    className="flex w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <option value="Easy">Easy</option>
+                    <option value="Medium">Medium</option>
+                    <option value="Hard">Hard</option>
+                  </select>
                 </div>
                 <Button
                   className="w-full gap-2"

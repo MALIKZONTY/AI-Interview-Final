@@ -358,8 +358,14 @@ export function InterviewSessionPage() {
 
       <div className="grid gap-6 md:grid-cols-5">
         <Card className="md:col-span-2 overflow-hidden border-border/80">
-          <div className="aspect-video bg-black">
-            <video ref={videoRef} className="h-full w-full object-cover" playsInline muted autoPlay />
+          <div className="aspect-video bg-black overflow-hidden flex items-center justify-center">
+            <video 
+              ref={videoRef} 
+              className="h-full w-full object-cover -scale-x-100" 
+              playsInline 
+              muted 
+              autoPlay 
+            />
           </div>
         </Card>
         <Card className="md:col-span-3 border-border/80">

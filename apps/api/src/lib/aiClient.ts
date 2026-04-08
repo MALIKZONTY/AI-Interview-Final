@@ -5,12 +5,16 @@ const base = () => process.env.AI_SERVICE_URL ?? "http://localhost:8000";
 export type GeneratedQuestion = {
   text: string;
   expected_answer: string;
+  acceptable_variants: string[];
+  keywords: string[];
+  evaluation_rubric: Record<string, unknown>;
 };
 
 export async function aiGenerateQuestions(params: {
   resumeSummary: string;
   jdText: string;
   count?: number;
+  difficulty?: string;
 }): Promise<GeneratedQuestion[]> {
   const { data } = await axios.post<{ questions: GeneratedQuestion[] }>(
     `${base()}/generate-questions`,
@@ -18,6 +22,7 @@ export async function aiGenerateQuestions(params: {
       resume_summary: params.resumeSummary,
       jd_text: params.jdText,
       count: params.count ?? 20,
+      difficulty: params.difficulty ?? "Medium",
     },
     { timeout: 120_000 }
   );
@@ -40,6 +45,9 @@ export async function aiSpeechToText(audioBuffer: Buffer, mimeType: string): Pro
 export async function aiEvaluateAnswer(body: {
   question: string;
   expected_answer: string;
+  acceptable_variants: string[];
+  keywords: string[];
+  evaluation_rubric: Record<string, unknown>;
   candidate_answer: string;
   speech_meta?: Record<string, unknown>;
   video_meta?: Record<string, unknown>;

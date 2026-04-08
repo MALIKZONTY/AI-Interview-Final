@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Local speech-to-text using faster-whisper (pretrained Whisper weights, runs on CPU/GPU).
 No OpenAI or other paid APIs. FFmpeg converts tricky WebM clips to WAV when needed.

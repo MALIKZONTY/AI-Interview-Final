@@ -9,7 +9,8 @@
     "start": "node dist/index.js",
     "lint": "eslint src --ext .ts",
     "postinstall": "prisma generate",
-    "studio": "prisma studio"
+    "studio": "prisma studio",
+    "db:migrate": "prisma migrate dev"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",
