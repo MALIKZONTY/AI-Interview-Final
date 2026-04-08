@@ -234,9 +234,8 @@ export function DashboardPage() {
                     onChange={(e) => setNumQuestions(Number(e.target.value))}
                     className="w-full accent-primary"
                   />
-                  <p className="text-xs text-muted-foreground">
-                    The system generates 20 questions server-side; we use the first {numQuestions}{" "}
-                    for this run.
+                  <p className="text-xs text-muted-foreground mt-2">
+                    The system will generate {numQuestions} questions for your interview session.
                   </p>
                 </div>
                 <div className="space-y-2">
@@ -301,9 +300,10 @@ export function DashboardPage() {
                         onClick={() => navigate(`/history/${h.id}`)}
                       >
                         <span className="text-sm">
-                          {new Date(h.createdAt).toLocaleString(undefined, {
+                          {new Date(h.createdAt).toLocaleString("en-IN", {
                             dateStyle: "medium",
                             timeStyle: "short",
+                            hour12: true,
                           })}
                         </span>
                         <div className="flex flex-wrap items-center justify-end gap-2">

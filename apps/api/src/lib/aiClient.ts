@@ -54,10 +54,12 @@ export async function aiEvaluateAnswer(body: {
 }): Promise<{
   correctness_score: number;
   confidence_score: number;
+  debug?: Record<string, any>;
 }> {
   const { data } = await axios.post<{
     correctness_score: number;
     confidence_score: number;
+    debug?: Record<string, any>;
   }>(`${base()}/evaluate-answer`, body, { timeout: 60_000 });
   return data;
 }
@@ -83,7 +85,7 @@ export async function aiAnalyzeVideo(videoBuffer: Buffer, mimeType: string): Pro
     maxBodyLength: Infinity,
     maxContentLength: Infinity,
   });
-  return data as Record<string, unknown> & {
+    return data as Record<string, unknown> & {
     face_detected_ratio: number;
     eye_contact_proxy: number;
     head_stability: number;
@@ -93,4 +95,17 @@ export async function aiAnalyzeVideo(videoBuffer: Buffer, mimeType: string): Pro
     face_position_variance?: number;
     head_motion_mean?: number;
   };
+}
+
+export async function aiGenerateSummaryFeedback(body: {
+  avg_correctness: number;
+  avg_confidence: number;
+  interview_history: { question: string; answer: string }[];
+}): Promise<string> {
+  const { data } = await axios.post<{ summary: string }>(
+    `${base()}/generate-summary-feedback`,
+    body,
+    { timeout: 60_000 }
+  );
+  return data.summary;
 }

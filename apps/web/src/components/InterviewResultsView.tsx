@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2, Sparkles } from "lucide-react";
 import { TranscriptBlock } from "@/components/TranscriptBlock";
 import { RecordingBlock } from "@/components/RecordingBlock";
 import { Button } from "@/components/ui/button";
@@ -14,11 +14,14 @@ export type ResultRow = {
   recordingUrl: string | null;
   correctnessScore: number | null;
   confidenceScore: number | null;
+  aiFeedback?: string | null;
+  analysisMeta?: any;
 };
 
 export type ResultSummary = {
   avgCorrectness: number;
   avgConfidence: number;
+  summaryFeedback?: string | null;
 } | null;
 
 type Props = {
@@ -75,7 +78,7 @@ export function InterviewResultsView({
             Confidence reflects camera engagement, head stability, and delivery (fillers / pauses).
           </p>
         </CardHeader>
-        <CardContent className="pt-8 pb-10">
+        <CardContent className="pt-8 pb-10 space-y-8">
           {status === "processing" && result == null ? (
             <p className="text-muted-foreground">
               Still processing — scores will appear automatically in a few seconds.
@@ -89,22 +92,36 @@ export function InterviewResultsView({
               or start a new interview from the dashboard.
             </p>
           ) : result != null ? (
-            <div className="grid gap-8 sm:grid-cols-2">
-              <div className="space-y-2">
-                <p className="text-sm text-muted-foreground">Overall correctness</p>
-                <p className="font-display text-5xl font-bold tracking-tight text-primary">
-                  {correctnessPct}%
-                </p>
-                <Progress value={correctnessPct ?? 0} className="h-2" />
+            <>
+              <div className="grid gap-8 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <p className="text-sm text-muted-foreground">Overall correctness</p>
+                  <p className="font-display text-5xl font-bold tracking-tight text-primary">
+                    {correctnessPct}%
+                  </p>
+                  <Progress value={correctnessPct ?? 0} className="h-2" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm text-muted-foreground">Overall confidence</p>
+                  <p className="font-display text-5xl font-bold tracking-tight text-accent">
+                    {confidencePct}%
+                  </p>
+                  <Progress value={confidencePct ?? 0} className="h-2" />
+                </div>
               </div>
-              <div className="space-y-2">
-                <p className="text-sm text-muted-foreground">Overall confidence</p>
-                <p className="font-display text-5xl font-bold tracking-tight text-accent">
-                  {confidencePct}%
-                </p>
-                <Progress value={confidencePct ?? 0} className="h-2" />
-              </div>
-            </div>
+
+              {result.summaryFeedback && (
+                <div className="relative mt-8 rounded-xl bg-gradient-to-br from-primary/5 to-accent/5 p-6 border border-primary/10 shadow-sm animate-in fade-in zoom-in duration-700">
+                  <div className="flex items-center gap-2 mb-3 text-primary">
+                    <Sparkles className="h-5 w-5" />
+                    <span className="text-sm font-bold uppercase tracking-widest">Expert Mentor Summary</span>
+                  </div>
+                  <p className="text-lg leading-relaxed text-foreground/90 font-medium italic">
+                    {result.summaryFeedback}
+                  </p>
+                </div>
+              )}
+            </>
           ) : (
             <p className="text-muted-foreground">No aggregate scores for this interview yet.</p>
           )}
@@ -142,6 +159,17 @@ export function InterviewResultsView({
                     </strong>
                   </span>
                 </div>
+                {r.aiFeedback && (
+                  <div className="mt-6 rounded-lg bg-primary/5 p-4 border border-primary/10 shadow-sm animate-in fade-in slide-in-from-bottom-1 duration-500">
+                    <div className="flex items-center gap-2 mb-2 text-primary">
+                      <Sparkles className="h-4 w-4" />
+                      <span className="text-xs font-semibold uppercase tracking-wider">Expert Feedback</span>
+                    </div>
+                    <p className="text-sm leading-relaxed text-foreground italic">
+                      "{r.aiFeedback}"
+                    </p>
+                  </div>
+                )}
               </CardContent>
             </Card>
           ))}

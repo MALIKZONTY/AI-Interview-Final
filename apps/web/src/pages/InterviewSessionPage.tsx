@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { useInterviewStore } from "@/store/interviewStore";
 
 const ANSWER_SECONDS = 30;
+const THINK_SECONDS = 10;
 
 function pickMimeType(): string {
   const candidates = [
@@ -49,7 +50,7 @@ export function InterviewSessionPage() {
   const [index, setIndex] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(ANSWER_SECONDS);
   const [phase, setPhase] = useState<
-    "arm" | "recording" | "uploading" | "generating" | "results"
+    "arm" | "reading" | "recording" | "uploading" | "generating" | "results"
   >("arm");
   const [streamReady, setStreamReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -122,7 +123,10 @@ export function InterviewSessionPage() {
     setPhase("uploading");
 
     await new Promise<void>((resolve) => {
-      rec.onstop = () => resolve();
+      rec.onstop = () => {
+        // Stabilization delay: allow final chunks to settle
+        setTimeout(() => resolve(), 150);
+      };
       rec.stop();
     });
 
@@ -156,7 +160,7 @@ export function InterviewSessionPage() {
     }
 
     setIndex((i) => i + 1);
-    setSecondsLeft(ANSWER_SECONDS);
+    setSecondsLeft(THINK_SECONDS);
     setPhase("arm");
   }, [cleanupStream, interviewId, isLast, q?.id]);
 
@@ -190,12 +194,31 @@ export function InterviewSessionPage() {
     }, 1000);
   }, [q, stopRecordingAndUpload]);
 
+  const startReadingPhase = useCallback(() => {
+    if (!q) return;
+    setPhase("reading");
+    setSecondsLeft(THINK_SECONDS);
+
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => {
+      setSecondsLeft((s) => {
+        if (s <= 1) {
+          if (timerRef.current) clearInterval(timerRef.current);
+          timerRef.current = null;
+          startQuestionRecording();
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+  }, [q, startQuestionRecording]);
+
   useEffect(() => {
     if (!streamReady || mediaError || !q || phase !== "arm") return;
     const token = ++armTokenRef.current;
     const t = window.setTimeout(() => {
       if (token !== armTokenRef.current) return;
-      startQuestionRecording();
+      startReadingPhase();
     }, 500);
     return () => {
       armTokenRef.current += 1;
@@ -340,6 +363,12 @@ export function InterviewSessionPage() {
           </p>
           <h1 className="font-display text-xl font-semibold">Live interview</h1>
         </div>
+        {phase === "reading" && (
+          <Badge variant="secondary" className="gap-1.5 border-blue-300 text-blue-700 dark:text-blue-300">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Prepare your answer
+          </Badge>
+        )}
         {phase === "recording" && (
           <Badge variant="outline" className="gap-1.5 border-red-300 text-red-700 dark:text-red-300">
             <Circle className="h-2 w-2 fill-red-500 text-red-500 animate-pulseSoft" />
@@ -375,8 +404,10 @@ export function InterviewSessionPage() {
           <CardContent className="space-y-6">
             <div className="flex items-end justify-between gap-4">
               <div>
-                <p className="text-sm text-muted-foreground mb-1">Time remaining</p>
-                <p className="font-display text-5xl font-bold tabular-nums tracking-tight">
+                <p className="text-sm text-muted-foreground mb-1">
+                  {phase === "reading" ? "Reading time" : "Time remaining"}
+                </p>
+                <p className={`font-display text-5xl font-bold tabular-nums tracking-tight ${phase === "reading" ? "text-blue-600 dark:text-blue-400" : ""}`}>
                   {secondsLeft}
                   <span className="text-2xl text-muted-foreground font-medium ml-1">s</span>
                 </p>
@@ -388,9 +419,20 @@ export function InterviewSessionPage() {
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              Recording starts automatically once your camera is ready. At 0s the clip uploads and
-              the next question appears.
+              {phase === "reading" 
+                ? "Recording starts automatically in 10s. You can skip this by clicking below." 
+                : "Recording is live! At 0s the clip uploads and the next question appears."}
             </p>
+            {phase === "reading" && (
+              <Button 
+                variant="outline" 
+                className="w-full gap-2 border-blue-200 hover:bg-blue-50 dark:border-blue-900 dark:hover:bg-blue-950" 
+                onClick={startQuestionRecording}
+              >
+                <Sparkles className="h-4 w-4 text-blue-500" />
+                Start Recording Now
+              </Button>
+            )}
             {error && (
               <p className="text-sm text-red-600 dark:text-red-400" role="alert">
                 {error}

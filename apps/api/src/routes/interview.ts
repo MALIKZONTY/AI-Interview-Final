@@ -9,6 +9,7 @@ import {
   aiSpeechToText,
   aiAnalyzeVideo,
   aiEvaluateAnswer,
+  aiGenerateSummaryFeedback,
 } from "../lib/aiClient.js";
 import { Readable } from "node:stream";
 
@@ -30,18 +31,17 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
     const { jdText, numQuestions, difficulty } = parsed.data;
 
     const resume = await prisma.resume.findUnique({ where: { userId: request.userId } });
-    const resumeSummary = resume
-      ? `Resume on file (${resume.fileName ?? "resume.pdf"}). URL: ${resume.url}`
-      : "No resume uploaded; infer general professional background.";
+    const resumeSummary = (resume as any)?.contentText || "";
 
     let generated;
     try {
       generated = await aiGenerateQuestions({
-        resumeSummary,
+        resumeSummary: resumeSummary || "No resume text found; generate based on JD only.",
         jdText,
-        count: 20,
+        count: numQuestions,
         difficulty,
       });
+
     } catch (e) {
       console.error("AI generate failed", e);
       return reply.status(502).send({ error: "AI service unavailable. Is the Python service running?" });
@@ -104,8 +104,9 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    if (!buffer?.length) {
-      return reply.status(400).send({ error: "No video file (field name: video)" });
+    if (!buffer?.length || buffer.length < 1024) {
+      console.warn(`Empty or tiny video buffer (${buffer?.length || 0} bytes) for user ${request.userId}. Skipping upload.`);
+      return reply.send({ ok: true, message: "Empty/Tiny recording skipped for stability" });
     }
     if (!interviewId || !questionId) {
       return reply.status(400).send({ error: "interviewId and questionId form fields required" });
@@ -127,7 +128,11 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
     try {
       const uploaded = await new Promise<{ secure_url: string }>((resolve, reject) => {
         const stream = cloudinary.uploader.upload_stream(
-          { folder: "interview/answers", resource_type: "video" },
+          { 
+            folder: "interview/answers", 
+            resource_type: "video",
+            format: "webm", // Explicitly set format for WebM stability
+          },
           (err, result) => {
             if (err || !result) reject(err ?? new Error("Upload failed"));
             else resolve(result as { secure_url: string });
@@ -223,7 +228,10 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
         overallScore: interview.overallScore,
         createdAt: interview.createdAt,
       },
-      result: interview.result,
+      result: interview.result ? {
+        ...interview.result,
+        summaryFeedback: (interview as any).aiFeedback
+      } : null,
       questions: visible.map((q) => {
         const r = q.responses[0];
         return {
@@ -234,6 +242,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
           recordingUrl: r?.cloudinaryUrl ?? null,
           correctnessScore: r?.correctnessScore,
           confidenceScore: r?.confidenceScore,
+          aiFeedback: (r as any)?.aiFeedback,
         };
       }),
     });
@@ -284,7 +293,10 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
         overallScore: interview.overallScore,
         status: interview.status,
       },
-      result: interview.result,
+      result: interview.result ? {
+        ...interview.result,
+        summaryFeedback: (interview as any).aiFeedback
+      } : null,
       questions: qs.map((q) => {
         const r = q.responses[0];
         return {
@@ -295,6 +307,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
           recordingUrl: r?.cloudinaryUrl ?? null,
           correctnessScore: r?.correctnessScore,
           confidenceScore: r?.confidenceScore,
+          aiFeedback: (r as any)?.aiFeedback,
         };
       }),
     });
@@ -337,12 +350,18 @@ async function processInterview(interviewId: string): Promise<void> {
       }
 
       const mime = "video/webm";
-      let transcript = "";
+      let transcript = resp.transcript || "";
       let videoMeta: Record<string, unknown> = {};
-      try {
-        transcript = await aiSpeechToText(videoBuf, mime);
-      } catch (e) {
-        console.error("speech-to-text", e);
+
+      // Only perform Speech-to-Text if transcript is missing
+      if (!transcript) {
+        try {
+          transcript = await aiSpeechToText(videoBuf, mime);
+        } catch (e) {
+          console.error("speech-to-text", e);
+        }
+      } else {
+        console.log(`Reusing existing transcript for question ${q.id}`);
       }
       try {
         const v = await aiAnalyzeVideo(videoBuf, mime);
@@ -353,6 +372,7 @@ async function processInterview(interviewId: string): Promise<void> {
 
       let correctness = 0;
       let confidence = 0;
+      let evalData: any = {};
       try {
         const ev = await aiEvaluateAnswer({
           question: q.text,
@@ -365,17 +385,19 @@ async function processInterview(interviewId: string): Promise<void> {
         });
         correctness = ev.correctness_score;
         confidence = ev.confidence_score;
+        evalData = ev.debug || {};
       } catch (e) {
         console.error("evaluate", e);
       }
 
-      await prisma.response.updateMany({
+      await (prisma.response as any).update({
         where: { questionId: q.id },
         data: {
           transcript,
           correctnessScore: correctness,
           confidenceScore: confidence,
-          analysisMeta: videoMeta as Prisma.InputJsonValue,
+          aiFeedback: evalData.feedback || null,
+          analysisMeta: videoMeta as any,
         },
       });
       scores.push({ c: correctness, f: confidence });
@@ -385,9 +407,30 @@ async function processInterview(interviewId: string): Promise<void> {
       scores.length > 0 ? scores.reduce((a, s) => a + s.c, 0) / scores.length : 0;
     const avgF =
       scores.length > 0 ? scores.reduce((a, s) => a + s.f, 0) / scores.length : 0;
-    const overall = (avgC * 0.7) + (avgF * 0.3);
+    const overall = avgC * 0.7 + avgF * 0.3;
 
-    await prisma.result.upsert({
+    // Generate Holistic Summary Feedback
+    let summaryFeedback = null;
+    try {
+      const qs = await prisma.question.findMany({
+        where: { interviewId },
+        include: { responses: true },
+        orderBy: { orderIndex: "asc" },
+      });
+      const history = qs.map((q) => ({
+        question: q.text,
+        answer: q.responses[0]?.transcript || "No answer provided.",
+      }));
+      summaryFeedback = await aiGenerateSummaryFeedback({
+        avg_correctness: avgC,
+        avg_confidence: avgF,
+        interview_history: history,
+      });
+    } catch (e) {
+      console.error("Summary feedback generation failed", e);
+    }
+
+    await (prisma.result as any).upsert({
       where: { interviewId },
       create: {
         interviewId,
@@ -402,11 +445,12 @@ async function processInterview(interviewId: string): Promise<void> {
       },
     });
 
-    await prisma.interview.update({
+    await (prisma.interview as any).update({
       where: { id: interviewId },
       data: {
         status: "completed",
         overallScore: overall,
+        aiFeedback: summaryFeedback,
       },
     });
   } catch (err) {

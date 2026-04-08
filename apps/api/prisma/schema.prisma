@@ -27,6 +27,7 @@ model Resume {
   cloudinaryPublicId String
   url                String
   fileName           String?
+  contentText        String?  @db.Text
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 }
@@ -38,10 +39,11 @@ model Interview {
   jdText       String?  @db.Text
   numQuestions Int
   /// active | processing | completed | failed
-  status       String   @default("draft")
-  overallScore Float?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  status        String    @default("pending") // pending, active, processing, completed, failed
+  aiFeedback    String?   @db.Text
+  overallScore  Float?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   questions Question[]
   result    Result?
@@ -74,6 +76,7 @@ model Response {
   transcript       String?  @db.Text
   correctnessScore Float?
   confidenceScore  Float?
+  aiFeedback       String?  @db.Text
   analysisMeta     Json?
   createdAt        DateTime @default(now())
 }
@@ -83,8 +86,8 @@ model Result {
   id             String    @id @default(cuid())
   interviewId  String    @unique
   interview      Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
-  avgCorrectness Float
-  avgConfidence  Float
-  details        Json?
-  createdAt      DateTime  @default(now())
+  avgCorrectness  Float
+  avgConfidence   Float
+  details         Json?
+  createdAt       DateTime  @default(now())
 }

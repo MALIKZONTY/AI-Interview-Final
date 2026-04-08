@@ -12,7 +12,7 @@ router = APIRouter()
 class GenBody(BaseModel):
     resume_summary: str = ""
     jd_text: str
-    count: int = Field(default=20, ge=5, le=30)
+    count: int = Field(default=20, ge=1, le=30)
     difficulty: str = Field(default="Medium")
 
 # Pydantic schema for the LLM to strictly follow
@@ -44,12 +44,30 @@ async def generate_questions(body: GenBody):
     model_name = os.getenv("OPENAI_MODEL", "llama-3.3-70b-versatile")
     
     system_prompt = f"""
-    You are an expert technical interviewer.
-    Generate {body.count} highly relevant interview questions.
+    You are an expert interviewer. 
+    You MUST generate {body.count} interview questions based STRICTLY on the provided Job Description and Resume context below.
+    
+    JOB DESCRIPTION:
+    {body.jd_text}
+    
+    CANDIDATE RESUME:
+    {body.resume_summary}
+    
     Target difficulty: {body.difficulty}.
-    Candidate's matched skills: {matched}. (Focus technical questions here).
-    Candidate's missing skills: {missing}. (Focus gap-analysis/learning questions here).
-    Generate a mix of Technical, Behavioral, and Scenario-based questions.
+    Candidate's matched skills: {matched}.
+    Candidate's missing skills: {missing}.
+    
+    CRITICAL CONSTRAINT: 
+    Only generate questions that are directly relevant to the specific role and industry described in the JOB DESCRIPTION. 
+    - If the JD is technical (e.g. Software Engineer), ask technical questions. 
+    - If the JD is non-technical (e.g. Cricket Coach, Sales, Management), ask questions specific to that field. 
+    - DO NOT default to general software architecture or coding questions (like Microservices vs Monolith) unless they are explicitly relevant to the role.
+    
+    Generate a balanced mix of:
+    1. JD-Specific Questions: Based strictly on the roles and responsibilities in the job description.
+    2. Resume-Specific Questions: Deep-dive into the candidate's listed projects, past work experience, and specific skills found in their resume summary.
+    3. Behavioral & Scenario Questions: Based on the intersection of the role and the candidate's background.
+
     For each question, ensure you provide:
     1. A detailed expected answer.
     2. Multiple acceptable variants (related answers).
