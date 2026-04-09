@@ -3,7 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import axios from "axios";
 import { prisma } from "../lib/prisma.js";
-import { cloudinary } from "../lib/cloudinary.js";
+import { supabase, storageUpload } from "../lib/supabase.js";
 import {
   aiGenerateQuestions,
   aiSpeechToText,
@@ -11,7 +11,6 @@ import {
   aiEvaluateAnswer,
   aiGenerateSummaryFeedback,
 } from "../lib/aiClient.js";
-import { Readable } from "node:stream";
 
 const startSchema = z.object({
   jdText: z.string().min(10, "Job description is too short"),
@@ -87,9 +86,12 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
     let questionId = "";
     let buffer: Buffer | null = null;
 
+    let mimetype = "";
+
     const parts = request.parts();
     for await (const part of parts) {
       if (part.type === "file" && part.fieldname === "video") {
+        mimetype = part.mimetype;
         const chunks: Buffer[] = [];
         for await (const chunk of part.file) {
           chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -104,9 +106,9 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    if (!buffer?.length || buffer.length < 1024) {
-      console.warn(`Empty or tiny video buffer (${buffer?.length || 0} bytes) for user ${request.userId}. Skipping upload.`);
-      return reply.send({ ok: true, message: "Empty/Tiny recording skipped for stability" });
+    if (!buffer?.length || buffer.length < 100) {
+      console.warn(`[interview] Skipping tiny recording for user ${request.userId} (q:${questionId}): ${buffer?.length || 0} bytes. Might be a warmup/empty clip.`);
+      return reply.send({ ok: true, message: "Recording skipped (too small)" });
     }
     if (!interviewId || !questionId) {
       return reply.status(400).send({ error: "interviewId and questionId form fields required" });
@@ -124,32 +126,21 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: "Invalid question for this interview" });
     }
 
-    let cloudinaryUrl: string;
+    let storageUrl: string;
     try {
-      const uploaded = await new Promise<{ secure_url: string }>((resolve, reject) => {
-        const stream = cloudinary.uploader.upload_stream(
-          { 
-            folder: "interview/answers", 
-            resource_type: "video",
-            format: "webm", // Explicitly set format for WebM stability
-          },
-          (err, result) => {
-            if (err || !result) reject(err ?? new Error("Upload failed"));
-            else resolve(result as { secure_url: string });
-          }
-        );
-        Readable.from(buffer).pipe(stream);
-      });
-      cloudinaryUrl = uploaded.secure_url;
+      // Shift to Supabase Storage: bucket 'interview'
+      const path = `answers/${interviewId}/${questionId}_${Date.now()}.webm`;
+      const uploaded = await storageUpload("interview", path, buffer, mimetype || "video/webm");
+      storageUrl = uploaded.url;
     } catch (e) {
-      console.error(e);
-      return reply.status(500).send({ error: "Video upload failed" });
+      console.error("[interview] Supabase upload failed:", e);
+      return reply.status(500).send({ error: "Video upload failed. Check Supabase connection/keys." });
     }
 
-    await prisma.response.upsert({
+    await (prisma.response as any).upsert({
       where: { questionId: q.id },
-      create: { questionId: q.id, cloudinaryUrl },
-      update: { cloudinaryUrl },
+      create: { questionId: q.id, storageUrl } as any,
+      update: { storageUrl } as any,
     });
 
     /**
@@ -166,7 +157,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
       },
     });
     if (progress?.status === "active") {
-      const allAnswered = progress.questions.every((qu) => qu.responses[0]?.cloudinaryUrl);
+      const allAnswered = progress.questions.every((qu) => (qu.responses[0] as any)?.storageUrl);
       if (allAnswered && progress.questions.length === interview.numQuestions) {
         await prisma.interview.update({
           where: { id: interviewId },
@@ -176,7 +167,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    return reply.send({ ok: true, cloudinaryUrl });
+    return reply.send({ ok: true, storageUrl });
   });
 
   app.post("/:id/process", { preHandler: [app.authenticate] }, async (request, reply) => {
@@ -239,7 +230,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
           orderIndex: q.orderIndex,
           text: q.text,
           transcript: r?.transcript,
-          recordingUrl: r?.cloudinaryUrl ?? null,
+          recordingUrl: (r as any)?.storageUrl ?? null,
           correctnessScore: r?.correctnessScore,
           confidenceScore: r?.confidenceScore,
           aiFeedback: (r as any)?.aiFeedback,
@@ -304,7 +295,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
           orderIndex: q.orderIndex,
           text: q.text,
           transcript: r?.transcript,
-          recordingUrl: r?.cloudinaryUrl ?? null,
+          recordingUrl: (r as any)?.storageUrl ?? null,
           correctnessScore: r?.correctnessScore,
           confidenceScore: r?.confidenceScore,
           aiFeedback: (r as any)?.aiFeedback,
@@ -333,11 +324,11 @@ async function processInterview(interviewId: string): Promise<void> {
 
     for (const q of questions) {
       const resp = q.responses[0];
-      if (!resp?.cloudinaryUrl) continue;
+      if (!(resp as any)?.storageUrl) continue;
 
       let videoBuf: Buffer;
       try {
-        const res = await axios.get<ArrayBuffer>(resp.cloudinaryUrl, {
+        const res = await axios.get<ArrayBuffer>((resp as any).storageUrl, {
           responseType: "arraybuffer",
           timeout: 120_000,
           maxContentLength: Infinity,
@@ -398,7 +389,7 @@ async function processInterview(interviewId: string): Promise<void> {
           confidenceScore: confidence,
           aiFeedback: evalData.feedback || null,
           analysisMeta: videoMeta as any,
-        },
+        } as any,
       });
       scores.push({ c: correctness, f: confidence });
     }
@@ -437,12 +428,12 @@ async function processInterview(interviewId: string): Promise<void> {
         avgCorrectness: avgC,
         avgConfidence: avgF,
         details: { perQuestion: scores },
-      },
+      } as any,
       update: {
         avgCorrectness: avgC,
         avgConfidence: avgF,
         details: { perQuestion: scores },
-      },
+      } as any,
     });
 
     await (prisma.interview as any).update({
@@ -451,7 +442,7 @@ async function processInterview(interviewId: string): Promise<void> {
         status: "completed",
         overallScore: overall,
         aiFeedback: summaryFeedback,
-      },
+      } as any,
     });
   } catch (err) {
     console.error("processInterview fatal", err);

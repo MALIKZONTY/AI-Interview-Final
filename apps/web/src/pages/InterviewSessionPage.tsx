@@ -82,7 +82,12 @@ export function InterviewSessionPage() {
     async function media() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user" },
+          video: { 
+            facingMode: "user",
+            width: { min: 320, ideal: 640, max: 640 },
+            height: { min: 240, ideal: 480, max: 480 },
+            frameRate: { ideal: 20, max: 24 }
+          },
           audio: true,
         });
         if (cancelled) {
@@ -124,10 +129,15 @@ export function InterviewSessionPage() {
 
     await new Promise<void>((resolve) => {
       rec.onstop = () => {
-        // Stabilization delay: allow final chunks to settle
-        setTimeout(() => resolve(), 150);
+        // Stabilization delay: allow final chunks to settle (increased for Supabase stability)
+        setTimeout(() => resolve(), 500);
       };
-      rec.stop();
+      if (rec.state !== "inactive") {
+        rec.requestData(); // Force final chunk flush
+        rec.stop();
+      } else {
+        resolve();
+      }
     });
 
     const blob = new Blob(chunksRef.current, { type: rec.mimeType });
@@ -171,7 +181,13 @@ export function InterviewSessionPage() {
     setError(null);
     chunksRef.current = [];
     const mimeType = pickMimeType();
-    const rec = new MediaRecorder(stream, { mimeType });
+    // Ultra-optimized: 1Mbps at 480p keeps 30s videos ~4MB.
+    // Extremely safe for all cloud limits and slow internet.
+    const rec = new MediaRecorder(stream, { 
+      mimeType,
+      videoBitsPerSecond: 1_000_000, 
+      audioBitsPerSecond: 96_000
+    });
     recorderRef.current = rec;
     rec.ondataavailable = (e) => {
       if (e.data.size > 0) chunksRef.current.push(e.data);

@@ -66,7 +66,7 @@ class SummaryResult(BaseModel):
 async def _llm_correctness(body: EvaluateBody, behavioral_context: str = "") -> LLMCorrectnessResult | None:
     """Uses Groq to judge the correctness of the candidate answer based on the rubric and behavioral context."""
     try:
-        model_name = os.getenv("OPENAI_MODEL", "llama-3.3-70b-versatile")
+        model_name = os.getenv("OPENAI_MODEL", "llama-3.1-8b-instant")
         
         system_prompt = f"""
         You are an expert technical interviewer. 
@@ -383,7 +383,7 @@ async def evaluate_answer(body: EvaluateBody):
 async def generate_summary_feedback(body: SummaryBody):
     """Generates an overall interview performance summary."""
     try:
-        model_name = os.getenv("OPENAI_MODEL", "llama-3.3-70b-versatile")
+        model_name = os.getenv("OPENAI_MODEL", "llama-3.1-8b-instant")
         
         history_text = "\n".join([f"Q: {h['question']}\nA: {h['answer']}" for h in body.interview_history])
         
@@ -409,14 +409,27 @@ async def generate_summary_feedback(body: SummaryBody):
             model=model_name,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": "Please generate the holistic summary now in pure JSON format with key \"summary\"."}
+                {"role": "user", "content": "Please generate the holistic summary now in pure JSON format with key \"summary\". The value of \"summary\" MUST BE A PLAIN STRING, not an object or a list."}
             ],
             response_format={"type": "json_object"},
             temperature=0.5
         )
         
-        res = SummaryResult.model_validate_json(completion.choices[0].message.content)
-        return {"summary": res.summary}
+        raw_content = completion.choices[0].message.content
+        try:
+            # Try to parse the JSON normally
+            data = json.loads(raw_content)
+            summary_val = data.get("summary", "")
+            if isinstance(summary_val, dict):
+                # If LLM ignored instructions and sent a dict, flatten it to a string
+                summary_str = " ".join([str(v) for v in summary_val.values() if v])
+            else:
+                summary_str = str(summary_val)
+            return {"summary": summary_str}
+        except Exception:
+            # Fallback if manual parsing fails
+            res = SummaryResult.model_validate_json(raw_content)
+            return {"summary": res.summary}
         
     except Exception as e:
         print(f"Summary generation failed: {e}")

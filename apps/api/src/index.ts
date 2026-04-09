@@ -6,12 +6,10 @@ import jwtAuthPlugin from "./plugins/jwtAuth.js";
 import authRoutes from "./routes/auth.js";
 import uploadRoutes from "./routes/upload.js";
 import interviewRoutes from "./routes/interview.js";
-import { initCloudinary } from "./lib/cloudinary.js";
 
 const port = Number(process.env.PORT ?? 4000);
 const frontendUrl = process.env.FRONTEND_URL ?? "http://localhost:5173";
 
-initCloudinary();
 
 const app = Fastify({ logger: true });
 

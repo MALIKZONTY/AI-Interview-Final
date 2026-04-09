@@ -24,7 +24,7 @@ export async function aiGenerateQuestions(params: {
       count: params.count ?? 20,
       difficulty: params.difficulty ?? "Medium",
     },
-    { timeout: 120_000 }
+    { timeout: 300_000 }
   );
   return data.questions;
 }
@@ -60,7 +60,7 @@ export async function aiEvaluateAnswer(body: {
     correctness_score: number;
     confidence_score: number;
     debug?: Record<string, any>;
-  }>(`${base()}/evaluate-answer`, body, { timeout: 60_000 });
+  }>(`${base()}/evaluate-answer`, body, { timeout: 300_000 });
   return data;
 }
 
@@ -81,7 +81,7 @@ export async function aiAnalyzeVideo(videoBuffer: Buffer, mimeType: string): Pro
   form.append("file", videoBuffer, { filename: "answer.webm", contentType: mimeType });
   const { data } = await axios.post(`${base()}/analyze-video`, form, {
     headers: form.getHeaders(),
-    timeout: 120_000,
+    timeout: 600_000,
     maxBodyLength: Infinity,
     maxContentLength: Infinity,
   });
