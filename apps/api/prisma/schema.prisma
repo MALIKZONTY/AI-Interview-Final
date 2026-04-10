@@ -37,6 +37,7 @@ model Interview {
   numQuestions Int
   /// active | processing | completed | failed
   status       String     @default("pending")
+  difficulty   String?
   aiFeedback   String?
   overallScore Float?
   createdAt    DateTime   @default(now())

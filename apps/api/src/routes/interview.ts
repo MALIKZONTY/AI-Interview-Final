@@ -91,6 +91,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
         userId: request.userId,
         jdText,
         numQuestions,
+        difficulty,
         status: "active",
         questions: {
           create: generated.map((q, i) => ({
@@ -102,7 +103,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
             evaluationRubric: q.evaluation_rubric ? (q.evaluation_rubric as Prisma.InputJsonValue) : {},
           })),
         },
-      },
+      } as any,
       include: { questions: { orderBy: { orderIndex: "asc" } } },
     });
 
@@ -339,11 +340,13 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
         createdAt: true,
         overallScore: true,
         numQuestions: true,
+        difficulty: true,
         status: true,
+        jdText: true,
         result: {
           select: { avgCorrectness: true, avgConfidence: true },
         },
-      },
+      } as any,
     });
     return reply.send({ interviews: list });
   });
