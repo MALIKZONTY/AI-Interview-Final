@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+from typing import Any
 from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
 
@@ -14,8 +15,8 @@ class ParsedProfile(BaseModel):
     candidate_skills: list[str] = Field(description="Skills extracted from the resume summary")
     matched_skills: list[str] = Field(description="Job description skills that the candidate has")
     missing_skills: list[str] = Field(description="Job description skills that the candidate lacks")
-    projects: list[str] = Field(description="Key projects or achievements from the candidate")
-    experience: list[str] = Field(description="Summary of work experience roles")
+    projects: list[Any] = Field(description="Key projects or achievements from the candidate")
+    experience: list[Any] = Field(description="Summary of work experience roles")
 
 async def parse_resume_and_jd(resume_summary: str, jd_text: str) -> ParsedProfile:
     """

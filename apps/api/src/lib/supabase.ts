@@ -47,6 +47,50 @@ export async function storageUpload(
   };
 }
 
+/**
+ * Utility to create a signed upload URL for a specific path in a bucket.
+ * Valid for 60 seconds. Returns the URL the client can PUT to.
+ */
+export async function createSignedUploadUrl(
+  bucket: string,
+  path: string
+): Promise<{ signedUrl: string; token: string; path: string }> {
+  if (!supabase) {
+    throw new Error("Supabase client not initialized.");
+  }
+
+  const { data, error } = await supabase.storage
+    .from(bucket)
+    .createSignedUploadUrl(path);
+
+  if (error) {
+    throw error;
+  }
+
+  return {
+    signedUrl: data.signedUrl,
+    token: data.token,
+    path: path,
+  };
+}
+
+export async function listPath(bucket: string, path: string) {
+  if (!supabase) throw new Error("Supabase client not initialized.");
+  const { data, error } = await supabase.storage.from(bucket).list(path, {
+    sortBy: { column: "name", order: "asc" },
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function downloadFile(bucket: string, path: string): Promise<Buffer> {
+  if (!supabase) throw new Error("Supabase client not initialized.");
+  const { data, error } = await supabase.storage.from(bucket).download(path);
+  if (error) throw error;
+  const arrayBuffer = await data.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
 export async function storageDelete(bucket: string, path: string): Promise<void> {
   if (!supabase) {
     console.error(`[supabase] Cannot delete ${path}; client not initialized.`);

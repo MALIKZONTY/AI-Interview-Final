@@ -9,6 +9,7 @@ build
 apps/api/prisma/*.db
 apps/api/prisma/*.db-journal
 __pycache__
+temp
 .venv
 *.pyc
 .pytest_cache
