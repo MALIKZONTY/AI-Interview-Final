@@ -1,0 +1,16 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-dotenv==1.0.1
+python-multipart==0.0.20
+numpy==2.2.1
+scikit-learn==1.6.0
+opencv-python-headless==4.10.0.84
+# Face mesh + iris landmarks for gaze-at-camera proxy (analyze-video)
+mediapipe>=0.10.14
+# Local STT — pretrained Whisper (CTranslate2); downloads weights on first use
+faster-whisper>=1.0.3
+# Local semantic similarity for scoring — pretrained MiniLM; pulls torch
+sentence-transformers>=3.3.0
+# Optional heavier STT (PyTorch): pip install openai-whisper
+# openai-whisper==20240930
+openai>=1.0.0
