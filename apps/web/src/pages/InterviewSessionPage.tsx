@@ -190,28 +190,42 @@ export function InterviewSessionPage() {
     }
 
     try {
+      const chunksQueue: Blob[] = [];
+      let isWsReady = false;
+
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
       ws.binaryType = "arraybuffer";
 
       ws.onopen = () => {
-        console.log("[session] Live feed connected");
+        console.log("[session] Live feed connected successfully via " + (wsUrl.startsWith("wss") ? "Secure" : "Standard") + " tunnel");
+        isWsReady = true;
+        // Flush any chunks that were captured during the handshake
+        while (chunksQueue.length > 0) {
+          const chunk = chunksQueue.shift();
+          if (chunk) ws.send(chunk);
+        }
       };
 
       const rec = new MediaRecorder(stream, { 
         mimeType,
-        videoBitsPerSecond: 1_000_000, 
-        audioBitsPerSecond: 96_000
+        videoBitsPerSecond: 1_200_000, // Slightly higher for remote clarity
+        audioBitsPerSecond: 128_000
       });
       recorderRef.current = rec;
 
       rec.ondataavailable = (e) => {
-        if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-          ws.send(e.data);
+        if (e.data.size > 0) {
+          if (isWsReady && ws.readyState === WebSocket.OPEN) {
+            ws.send(e.data);
+          } else {
+            // Buffer the critical video header and early chunks until connection is established
+            chunksQueue.push(e.data);
+          }
         }
       };
 
-      rec.start(100);
+      rec.start(200); // 200ms chunks are more stable for tunneled streaming
       setPhase("recording");
       setSecondsLeft(ANSWER_SECONDS);
 

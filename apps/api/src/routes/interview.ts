@@ -46,15 +46,17 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
     const localPath = join(tempDir, `${interviewId}_${questionId}.webm`);
     const fileStream = createWriteStream(localPath);
 
+    let totalReceived = 0;
     socket.on("message", (message: any, isBinary: any) => {
       if (isBinary) {
+        totalReceived += (message as Buffer).length;
         fileStream.write(message);
       }
     });
 
     socket.on("close", () => {
       fileStream.end();
-      console.log(`[stream] Client closed connection for ${questionId}`);
+      console.log(`[stream] Client closed connection for ${questionId}. Total data received: ${totalReceived} bytes.`);
     });
   });
 
@@ -208,11 +210,15 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
     try {
       if (existsSync(localPath)) {
         const buffer = readFileSync(localPath);
-        if (buffer.length > 100) {
+        console.log(`[submit] Finalizing local stream for ${questionId}. Found file size: ${buffer.length} bytes.`);
+        
+        if (buffer.length > 5000) { // Increased threshold to ensure we don't upload 0-byte header fragments
           const storagePath = `answers/${interviewId}/${questionId}_final_${Date.now()}.webm`;
           const uploaded = await storageUpload("interview", storagePath, buffer, "video/webm");
           storageUrl = uploaded.url;
-          console.log(`[submit] Finalized stream for ${questionId}: ${storageUrl}`);
+          console.log(`[submit] SUCCESSFULLY uploaded finalized stream to Supabase: ${storageUrl}`);
+        } else {
+          console.warn(`[submit] localPath exists but file is too small (${buffer.length} bytes). Stream might contain no actual video data.`);
         }
         unlinkSync(localPath);
       }
