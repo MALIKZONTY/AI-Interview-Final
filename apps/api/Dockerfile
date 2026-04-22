@@ -1,6 +1,12 @@
-FROM node:20-bookworm-slim AS base
+FROM node:20-bullseye-slim AS base
 WORKDIR /app
-RUN apt-get update && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# Install openssl 1.1 and other deps which are often required by older Prisma engines or specific cloud DBs
+RUN apt-get update && apt-get install -y \
+    openssl \
+    ca-certificates \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 RUN corepack enable && corepack prepare pnpm@9.14.2 --activate
 
 COPY package.json ./
