@@ -13,24 +13,28 @@ const frontendUrl = process.env.FRONTEND_URL ?? "http://localhost:5173";
 
 const app = Fastify({ logger: true });
 
-// Support Ngrok and Local development origins dynamically
+// Support Ngrok, Vercel, and Local development origins dynamically
 await app.register(cors, {
   origin: (origin, cb) => {
-    // Allow local development and explicit frontend URL
+    // Allow local development, Ngrok, and Vercel subdomains
     if (
       !origin || 
       origin.includes("localhost") || 
       origin.includes("127.0.0.1") || 
       origin === frontendUrl ||
+      origin.endsWith(".vercel.app") || // Allow all Vercel deployments
       origin.includes("ngrok-free.app") ||
       origin.includes("ngrok.io")
     ) {
       cb(null, true);
       return;
     }
+    app.log.warn(`Origin ${origin} blocked by CORS`);
     cb(new Error("Not allowed by CORS"), false);
   },
   credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
 });
 
 /** Large bodies for resume PDF + answer recordings */
