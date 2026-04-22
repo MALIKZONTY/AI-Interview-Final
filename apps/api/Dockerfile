@@ -1,5 +1,6 @@
 FROM node:20-bookworm-slim AS base
 WORKDIR /app
+RUN apt-get update && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN corepack enable && corepack prepare pnpm@9.14.2 --activate
 
 COPY package.json ./
