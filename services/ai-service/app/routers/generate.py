@@ -1,6 +1,8 @@
 from __future__ import annotations
+import math
 import os
 import random
+import re
 from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
@@ -8,6 +10,33 @@ from pydantic import BaseModel, Field
 from app.parser import parse_resume_and_jd, client
 
 router = APIRouter()
+
+# Characters a model reaches for in written prose that read badly through a speech
+# synthesiser. Question text is spoken aloud, so it gets normalised before storage.
+_SPOKEN_REPLACEMENTS = {
+    "\u2011": "-",   # non-breaking hyphen
+    "\u2012": "-",   # figure dash
+    "\u2010": "-",   # unicode hyphen
+    "\u2018": "'", "\u2019": "'",
+    "\u201c": '"', "\u201d": '"',
+    "\u2026": "...",
+    "\u00a0": " ",   # non-breaking space
+    "\u200b": "",    # zero-width space
+    "`": "", "*": "", "_": " ",
+}
+
+
+def _spoken_text(text: str) -> str:
+    """Normalises a generated question into something a voice reads cleanly."""
+    out = (text or "").strip()
+    # A spaced en/em dash is a spoken pause; a comma gets that across, the dash does not.
+    out = re.sub(r"\s*[\u2013\u2014]\s*", ", ", out)
+    for bad, good in _SPOKEN_REPLACEMENTS.items():
+        out = out.replace(bad, good)
+    out = re.sub(r"\s+", " ", out).strip()
+    out = re.sub(r"\s+([,.?!])", r"\1", out)
+    return out
+
 
 class GenBody(BaseModel):
     resume_summary: str = ""
@@ -20,7 +49,7 @@ class GeneratedAIQuestion(BaseModel):
     text: str = Field(description="The interview question")
     expected_answer: str = Field(description="The ideal, comprehensive answer")
     acceptable_variants: list[str] = Field(description="Valid alternative ways to answer or shorthand phrases (related answers)")
-    keywords: list[str] = Field(description="Crucial terminology that must be mentioned. MUST provide AT LEAST 20 keywords per question.")
+    keywords: list[str] = Field(description="Crucial terminology that should be mentioned. Provide 8 to 12 of the most important terms.")
     evaluation_rubric: dict[str, Any] = Field(description="Key-value pairs defining what constitutes partial vs full credit")
     category: str = Field(description="e.g., Technical, Behavioral, Scenario")
     difficulty: str = Field(description="e.g., Easy, Medium, Hard")
@@ -30,6 +59,39 @@ class GeneratedQuestionsBatch(BaseModel):
 
 class GenResponse(BaseModel):
     questions: list[dict]
+
+
+# Small models overrun their output budget past a handful of fully-specified questions.
+_BATCH_SIZE = 3
+
+
+async def _generate_batch(
+    model_name: str, base_prompt: str, count: int, avoid: str
+) -> list[GeneratedAIQuestion]:
+    """One generation call. Returns [] on any failure so the caller can stop or retry."""
+    try:
+        completion = await client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": base_prompt + avoid},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Generate exactly {count} interview question(s) now, in pure JSON, "
+                        f"as an object with a single `questions` array."
+                    ),
+                },
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.7,
+            max_completion_tokens=8000,
+        )
+        batch = GeneratedQuestionsBatch.model_validate_json(completion.choices[0].message.content)
+        return [q for q in batch.questions if q.text and q.text.strip()]
+    except Exception as e:
+        print(f"Question batch failed (count={count}): {e}")
+        return []
+
 
 @router.post("/generate-questions", response_model=GenResponse)
 async def generate_questions(body: GenBody):
@@ -45,7 +107,8 @@ async def generate_questions(body: GenBody):
     
     system_prompt = f"""
     You are an expert interviewer. 
-    You MUST generate {body.count} interview questions based STRICTLY on the provided Job Description and Resume context below.
+    You are interviewing this candidate. Questions come STRICTLY from the Job Description
+    and Resume below. You are asked for a few at a time; the exact number is in the user message.
     
     JOB DESCRIPTION:
     {body.jd_text}
@@ -63,53 +126,102 @@ async def generate_questions(body: GenBody):
     - If the JD is non-technical (e.g. Cricket Coach, Sales, Management), ask questions specific to that field. 
     - DO NOT default to general software architecture or coding questions (like Microservices vs Monolith) unless they are explicitly relevant to the role.
     
+    HOW TO PHRASE THE QUESTION TEXT — THIS MATTERS AS MUCH AS THE CONTENT:
+    Every `text` value is READ ALOUD to the candidate by a voice. Write what a real
+    interviewer would SAY in the room, not what an exam paper would print.
+
+    - One question, one idea. Never bundle two or three asks into one sentence.
+    - Keep it under 35 spoken words. If you need a comma-spliced clause to fit it, it is too long.
+    - Open the way people actually open: "Tell me about...", "Walk me through...",
+      "How would you...", "When would you...", "What happened when...", "Say you...".
+    - Reference their background naturally: "I saw you worked on X — how did you handle Y?"
+    - Contractions are good. "How'd you approach that?" beats "How did you approach that?".
+    - Ask about judgement and experience, not textbook definitions. Interviewers want to know
+      what someone DID and how they DECIDE, not whether they memorised a glossary.
+    - Never use parentheses, bullet points, code snippets, slashes, "e.g.", "i.e." or symbols —
+      they sound wrong when spoken. Write abbreviations the way you would say them.
+    - The VERY FIRST question of the interview must be an easy, warm conversational opener that
+      settles the candidate in. If questions have already been asked, do not open again — carry on.
+
+    Examples of the DIFFERENCE, for a backend role:
+      BAD  (written exam): "Explain the differences between SQL and NoSQL databases, including
+            their respective consistency models, and discuss the trade-offs in distributed systems."
+      GOOD (spoken):       "When would you reach for a NoSQL database over Postgres?"
+
+      BAD:  "Describe your experience with CI/CD pipelines (e.g. Jenkins, GitHub Actions)."
+      GOOD: "Walk me through what happens when you push a commit on your current team."
+
+      BAD:  "Elaborate on the implementation details of the caching layer referenced in your resume."
+      GOOD: "I saw you added a caching layer on that project. What pushed you to do it?"
+
+      BAD:  "Discuss a challenging situation, how you resolved it, and what you learned."
+      GOOD: "Tell me about a time something broke in production. What did you do first?"
+
     Generate a balanced mix of:
     1. JD-Specific Questions: Based strictly on the roles and responsibilities in the job description.
     2. Resume-Specific Questions: Deep-dive into the candidate's listed projects, past work experience, and specific skills found in their resume summary.
     3. Behavioral & Scenario Questions: Based on the intersection of the role and the candidate's background.
 
+    The `text` field is the spoken question and must follow the phrasing rules above.
+    The `expected_answer`, `keywords` and `evaluation_rubric` are for scoring only, are never
+    read aloud, and should stay as precise and technical as they need to be.
+
     For each question, ensure you provide:
     1. A detailed expected answer.
     2. Multiple acceptable variants (related answers).
-    3. AT LEAST 20 essential keywords that should be mentioned.
+    3. Between 8 and 12 essential keywords that should be mentioned.
     4. A structured evaluation rubric.
     
     You MUST return ONLY a JSON object with a single root property `questions`. It must be an array of objects.
     Each object MUST have the following keys: `text` (string), `expected_answer` (string), `acceptable_variants` (array of strings), `keywords` (array of strings), `evaluation_rubric` (object), `category` (string), `difficulty` (string).
     """
     
+    # Generated in small batches: one big call reliably overruns the output budget on
+    # smaller models, which returns fewer questions than asked for or invalid JSON.
+    collected: list[GeneratedAIQuestion] = []
+    attempts = 0
+    max_attempts = math.ceil(body.count / _BATCH_SIZE) + 2
+
     try:
-        completion = await client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": "Please generate the interview questions now in pure JSON format."}
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.7
+        while len(collected) < body.count and attempts < max_attempts:
+            attempts += 1
+            want = min(_BATCH_SIZE, body.count - len(collected))
+
+            already = "\n".join(f"- {q.text}" for q in collected)
+            avoid = (
+                f"\n\nYou have ALREADY asked the questions below. Do not repeat them or "
+                f"ask a near-duplicate:\n{already}"
+                if collected
+                else ""
+            )
+
+            batch = await _generate_batch(model_name, system_prompt, want, avoid)
+            if not batch:
+                break
+            collected.extend(batch)
+
+        if not collected:
+            raise RuntimeError("no questions generated")
+
+        return GenResponse(
+            questions=[
+                {
+                    "text": _spoken_text(q.text),
+                    "expected_answer": q.expected_answer,
+                    "acceptable_variants": q.acceptable_variants,
+                    "keywords": q.keywords,
+                    "evaluation_rubric": q.evaluation_rubric,
+                }
+                for q in collected[: body.count]
+            ]
         )
-        
-        batch = GeneratedQuestionsBatch.model_validate_json(completion.choices[0].message.content)
-        
-        # 4. Map back to Fastify expected dictionary
-        out = []
-        for q in batch.questions:
-            out.append({
-                "text": q.text,
-                "expected_answer": q.expected_answer,
-                "acceptable_variants": q.acceptable_variants,
-                "keywords": q.keywords,
-                "evaluation_rubric": q.evaluation_rubric
-            })
-            
-        return GenResponse(questions=out)
 
     except Exception as e:
         print(f"Error during question generation: {e}")
         # Severe fallback if LLM breaks
         return GenResponse(questions=[{
-            "text": "Could you walk me through your technical background?",
-            "expected_answer": "Candidate should explain their past projects.",
+            "text": "So, to get us started — tell me a bit about what you have been working on lately.",
+            "expected_answer": "Candidate should describe their recent work, projects and responsibilities.",
             "acceptable_variants": [],
             "keywords": ["experience", "projects"],
             "evaluation_rubric": {"full": "Provides clear history"}
@@ -181,6 +293,17 @@ async def generate_followup(body: FollowUpBody):
     The follow-up must reference something concrete the candidate actually said, be answerable
     in about 30 seconds of speech, and target difficulty {body.difficulty}.
 
+    PHRASING — the question is READ ALOUD, so write what an interviewer would SAY:
+    - One idea, under 35 spoken words, ending in a single question mark.
+    - Pick up their own words: "You mentioned the caching layer — what made you reach for that?"
+    - Natural openers: "You said...", "Walk me through...", "What made you...", "How did you...".
+    - Contractions are good. No parentheses, bullet points, symbols, "e.g." or "i.e.".
+    - Sound curious, not like a quiz. You are following a thread, not testing a definition.
+
+    BAD  (written exam): "Please elaborate on the specific methodology employed to diagnose
+          the aforementioned N+1 query problem and the rationale for eager loading."
+    GOOD (spoken):       "How did you spot that N+1 problem in the first place?"
+
     Return ONLY a JSON object:
     "should_follow_up": boolean
     "reason": string, one short sentence
@@ -213,7 +336,7 @@ async def generate_followup(body: FollowUpBody):
         "should_follow_up": True,
         "reason": decision.reason,
         "question": {
-            "text": q.text,
+            "text": _spoken_text(q.text),
             "expected_answer": q.expected_answer,
             "acceptable_variants": q.acceptable_variants,
             "keywords": q.keywords,

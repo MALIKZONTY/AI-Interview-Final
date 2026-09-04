@@ -50,11 +50,21 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(502).send({ error: "AI returned no questions" });
     }
 
+    /**
+     * The model does not always return the count it was asked for. Record what we
+     * actually got, otherwise the "every question answered" check below can never
+     * be satisfied and scoring never starts on its own.
+     */
+    const actualCount = Math.min(numQuestions, generated.length);
+    if (actualCount < numQuestions) {
+      console.warn(`[start] Asked for ${numQuestions} questions, generated ${generated.length}.`);
+    }
+
     const interview = await prisma.interview.create({
       data: {
         userId: request.userId,
         jdText,
-        numQuestions,
+        numQuestions: actualCount,
         difficulty,
         status: "active",
         questions: {
@@ -71,7 +81,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
       include: { questions: { orderBy: { orderIndex: "asc" } } },
     });
 
-    const selected = interview.questions.slice(0, numQuestions);
+    const selected = interview.questions.slice(0, actualCount);
     return reply.send({
       interviewId: interview.id,
       questions: selected.map((q) => ({
