@@ -1,6 +1,6 @@
 from __future__ import annotations
 """
-AI microservice: question generation, speech-to-text, video heuristics, and answer scoring.
+AI microservice: question generation, speech-to-text + vocal delivery metrics, and answer scoring.
 Designed to run standalone; the Node API calls these endpoints over HTTP.
 """
 
@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 _env = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(_env)
 
-from app.routers import analyze_video, evaluate, generate, speech, finetune
+from app.routers import evaluate, generate, speech, finetune
 
 app = FastAPI(title="Interview AI Service", version="1.0.0")
 
@@ -31,7 +31,6 @@ app.add_middleware(
 app.include_router(generate.router, tags=["generate"])
 app.include_router(speech.router, tags=["speech"])
 app.include_router(evaluate.router, tags=["evaluate"])
-app.include_router(analyze_video.router, tags=["video"])
 app.include_router(finetune.router, tags=["finetune"])
 
 

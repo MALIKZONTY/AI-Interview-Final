@@ -13,3 +13,6 @@ temp
 .venv
 *.pyc
 .pytest_cache
+
+# Local answer-audio storage (fallback when no cloud bucket is configured)
+storage/

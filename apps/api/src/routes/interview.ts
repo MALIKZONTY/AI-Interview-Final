@@ -2,14 +2,11 @@ import type { FastifyPluginAsync } from "fastify";
 import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import axios from "axios";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
 import { prisma } from "../lib/prisma.js";
-import { supabase, storageUpload, createSignedUploadUrl, listPath, downloadFile, storageDelete } from "../lib/supabase.js";
+import { storagePut, storageFetch } from "../lib/storage.js";
 import {
   aiGenerateQuestions,
   aiSpeechToText,
-  aiAnalyzeVideo,
   aiEvaluateAnswer,
   aiGenerateSummaryFeedback,
 } from "../lib/aiClient.js";
@@ -21,45 +18,9 @@ const startSchema = z.object({
 });
 
 /**
- * Interview lifecycle: start (generate 20 Qs), submit clips, process (AI), results & history.
+ * Interview lifecycle: start (generate 20 Qs), submit answer audio, process (AI), results & history.
  */
 const interviewRoutes: FastifyPluginAsync = async (app) => {
-  /**
-   * LIVE STREAMING WEBSOCKET (Option A)
-   * Streams video bits directly to backend disk, then pushes to cloud on close.
-   */
-  app.get("/stream", { websocket: true }, (connection: any, request: any) => {
-    const { interviewId, questionId } = request.query as { interviewId: string; questionId: string };
-    
-    // Robust check for connection.socket
-    const socket = connection.socket || connection;
-    
-    if (!interviewId || !questionId) {
-      if (socket.send) socket.send(JSON.stringify({ error: "Missing interviewId/questionId" }));
-      socket.close?.();
-      return;
-    }
-
-    const tempDir = join(process.cwd(), "temp", "streams");
-    if (!existsSync(tempDir)) mkdirSync(tempDir, { recursive: true });
-
-    const localPath = join(tempDir, `${interviewId}_${questionId}.webm`);
-    const fileStream = createWriteStream(localPath);
-
-    let totalReceived = 0;
-    socket.on("message", (message: any, isBinary: any) => {
-      if (isBinary) {
-        totalReceived += (message as Buffer).length;
-        fileStream.write(message);
-      }
-    });
-
-    socket.on("close", () => {
-      fileStream.end();
-      console.log(`[stream] Client closed connection for ${questionId}. Total data received: ${totalReceived} bytes.`);
-    });
-  });
-
   app.post("/start", { preHandler: [app.authenticate] }, async (request, reply) => {
     const parsed = startSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -120,74 +81,45 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
-  app.post("/upload-chunk-url", { preHandler: [app.authenticate] }, async (request, reply) => {
-    const { interviewId, questionId, chunkIndex } = request.body as {
-      interviewId: string;
-      questionId: string;
-      chunkIndex: number
-    };
-    if (!interviewId || !questionId || chunkIndex === undefined) {
-      return reply.status(400).send({ error: "interviewId, questionId and chunkIndex are required" });
-    }
-
-    // Temporary folder for chunks
-    const path = `temp/${interviewId}/${questionId}/chunk_${chunkIndex.toString().padStart(4, "0")}.webm`;
-    try {
-      const { signedUrl, path: storagePath } = await createSignedUploadUrl("interview", path);
-      return reply.send({ signedUrl, storagePath });
-    } catch (e) {
-      console.error("[interview] Failed to create chunk upload URL:", e);
-      return reply.status(500).send({ error: "Failed to generate chunk upload URL" });
-    }
-  });
-
-  app.post("/finalize-chunks", { preHandler: [app.authenticate] }, async (request, reply) => {
-    const { interviewId, questionId } = request.body as { interviewId: string; questionId: string };
-    if (!interviewId || !questionId) {
-      return reply.status(400).send({ error: "interviewId and questionId are required" });
-    }
-
-    try {
-      const tempFolder = `temp/${interviewId}/${questionId}`;
-      const chunks = await listPath("interview", tempFolder);
-      if (!chunks?.length) {
-        return reply.status(400).send({ error: "No fragments found to merge" });
-      }
-
-      // Sort chunks by name (padding ensures 0001 < 0010)
-      chunks.sort((a, b) => a.name.localeCompare(b.name));
-
-      const buffers: Buffer[] = [];
-      for (const chunk of chunks) {
-        const buf = await downloadFile("interview", `${tempFolder}/${chunk.name}`);
-        buffers.push(buf);
-      }
-
-      const finalBuffer = Buffer.concat(buffers);
-      const finalPath = `answers/${interviewId}/${questionId}_merged_${Date.now()}.webm`;
-
-      const { url: storageUrl } = await storageUpload("interview", finalPath, finalBuffer, "video/webm");
-
-      // Cleanup chunks
-      for (const chunk of chunks) {
-        await storageDelete("interview", `${tempFolder}/${chunk.name}`).catch(() => { });
-      }
-
-      return reply.send({ ok: true, storageUrl });
-    } catch (e) {
-      console.error("[interview] Finalization failed:", e);
-      return reply.status(500).send({ error: "Failed to merge video fragments" });
-    }
-  });
-
+  /**
+   * Answer upload — one audio clip per question, multipart with the file in `audio`.
+   * Transcription and scoring run later in processInterview; this just persists the clip.
+   */
   app.post("/submit", { preHandler: [app.authenticate] }, async (request, reply) => {
-    const { interviewId, questionId } = request.body as { 
-      interviewId: string; 
-      questionId: string; 
-    };
+    let interviewId = "";
+    let questionId = "";
+    let audio: Buffer | null = null;
+    let mimeType = "audio/webm";
+
+    try {
+      for await (const part of request.parts()) {
+        if (part.type === "file") {
+          const chunks: Buffer[] = [];
+          for await (const chunk of part.file) {
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          }
+          if (part.fieldname === "audio") {
+            audio = Buffer.concat(chunks);
+            if (part.mimetype) mimeType = part.mimetype;
+          }
+        } else if (part.fieldname === "interviewId") {
+          interviewId = String(part.value ?? "");
+        } else if (part.fieldname === "questionId") {
+          questionId = String(part.value ?? "");
+        }
+      }
+    } catch (e) {
+      request.log.error({ err: e }, "[submit] failed to read multipart body");
+      return reply.status(400).send({ error: "Malformed upload" });
+    }
 
     if (!interviewId || !questionId) {
       return reply.status(400).send({ error: "interviewId and questionId required" });
+    }
+    if (!audio || audio.length < 2000) {
+      return reply
+        .status(400)
+        .send({ error: "No audio captured for this question. Check your microphone and try again." });
     }
 
     const interview = await prisma.interview.findFirst({
@@ -202,44 +134,35 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: "Invalid question for this interview" });
     }
 
-    // Handshake: Finalize the live stream file
-    let storageUrl = "";
-    const tempDir = join(process.cwd(), "temp", "streams");
-    const localPath = join(tempDir, `${interviewId}_${questionId}.webm`);
+    const ext = mimeType.includes("mp4") ? "m4a" : "webm";
+    const objectPath = `answers/${interviewId}/${questionId}_${Date.now()}.${ext}`;
 
+    let storageUrl: string;
     try {
-      if (existsSync(localPath)) {
-        const buffer = readFileSync(localPath);
-        console.log(`[submit] Finalizing local stream for ${questionId}. Found file size: ${buffer.length} bytes.`);
-        
-        if (buffer.length > 5000) { // Increased threshold to ensure we don't upload 0-byte header fragments
-          const storagePath = `answers/${interviewId}/${questionId}_final_${Date.now()}.webm`;
-          const uploaded = await storageUpload("interview", storagePath, buffer, "video/webm");
-          storageUrl = uploaded.url;
-          console.log(`[submit] SUCCESSFULLY uploaded finalized stream to Supabase: ${storageUrl}`);
-        } else {
-          console.warn(`[submit] localPath exists but file is too small (${buffer.length} bytes). Stream might contain no actual video data.`);
-        }
-        unlinkSync(localPath);
-      }
+      const stored = await storagePut("interview", objectPath, audio, mimeType);
+      storageUrl = stored.url;
     } catch (e) {
-      console.error("[submit] Failed to finalize stream file:", e);
+      request.log.error({ err: e }, "[submit] failed to persist answer audio");
+      return reply.status(500).send({ error: "Could not save your answer. Please try again." });
     }
 
-    if (!storageUrl) {
-      return reply.status(400).send({ error: "No video data found for this question. Streaming might have failed." });
-    }
+    console.log(`[submit] Stored ${audio.length} bytes of audio for ${questionId} at ${storageUrl}`);
 
-    const savedResponse = await (prisma.response as any).upsert({
+    await (prisma.response as any).upsert({
       where: { questionId: q.id },
-      create: { questionId: q.id, storageUrl } as any,
-      update: { storageUrl } as any,
+      create: { questionId: q.id, storageUrl, analysisMeta: { mime_type: mimeType } } as any,
+      update: {
+        storageUrl,
+        analysisMeta: { mime_type: mimeType },
+        transcript: null,
+        correctnessScore: null,
+        confidenceScore: null,
+        aiFeedback: null,
+      } as any,
     });
 
-    console.log(`[submit] Saved to DB: Response for ${q.id} with storageUrl: ${savedResponse.storageUrl}`);
-
     /**
-     * When every question in this run has a video, start scoring immediately.
+     * When every question in this run has an answer, start scoring immediately.
      * Avoids relying on a second POST /process call (which can fail silently from the client).
      */
     const progress = await prisma.interview.findFirst({
@@ -262,7 +185,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    return reply.send({ ok: true, storageUrl });
+    return reply.send({ ok: true });
   });
 
   app.post("/:id/process", { preHandler: [app.authenticate] }, async (request, reply) => {
@@ -423,39 +346,30 @@ async function processInterview(interviewId: string): Promise<void> {
       const resp = q.responses as any;
       if (!(resp as any)?.storageUrl) continue;
 
-      let videoBuf: Buffer;
+      let audioBuf: Buffer;
       try {
-        const res = await axios.get<ArrayBuffer>((resp as any).storageUrl, {
-          responseType: "arraybuffer",
-          timeout: 120_000,
-          maxContentLength: Infinity,
-          maxBodyLength: Infinity,
-        });
-        videoBuf = Buffer.from(res.data);
+        audioBuf = await storageFetch((resp as any).storageUrl);
       } catch (e) {
-        console.error("Failed to fetch video", e);
+        console.error(`Failed to read answer audio for ${q.id}`, e);
         continue;
       }
 
-      const mime = "video/webm";
+      const storedMeta = ((resp as any).analysisMeta as Record<string, any>) || {};
+      const mime = storedMeta.mime_type || "audio/webm";
       let transcript = resp.transcript || "";
-      let videoMeta: Record<string, unknown> = {};
+      let voiceMeta: Record<string, unknown> = storedMeta.voice_meta || {};
 
-      // Only perform Speech-to-Text if transcript is missing
-      if (!transcript) {
+      // One pass gives us both the transcript and the delivery metrics.
+      if (!transcript || Object.keys(voiceMeta).length === 0) {
         try {
-          transcript = await aiSpeechToText(videoBuf, mime);
+          const stt = await aiSpeechToText(audioBuf, mime);
+          transcript = transcript || stt.text;
+          voiceMeta = stt.voice_meta;
         } catch (e) {
           console.error("speech-to-text", e);
         }
       } else {
         console.log(`Reusing existing transcript for question ${q.id}`);
-      }
-      try {
-        const v = await aiAnalyzeVideo(videoBuf, mime);
-        videoMeta = v as unknown as Record<string, unknown>;
-      } catch (e) {
-        console.error("analyze-video", e);
       }
 
       let correctness = 0;
@@ -469,7 +383,7 @@ async function processInterview(interviewId: string): Promise<void> {
           keywords: (q.keywords as string[]) || [],
           evaluation_rubric: (q.evaluationRubric as Record<string, unknown>) || {},
           candidate_answer: transcript,
-          video_meta: videoMeta,
+          voice_meta: voiceMeta,
         });
         correctness = ev.correctness_score;
         confidence = ev.confidence_score;
@@ -485,7 +399,7 @@ async function processInterview(interviewId: string): Promise<void> {
           correctnessScore: correctness,
           confidenceScore: confidence,
           aiFeedback: evalData.feedback || null,
-          analysisMeta: videoMeta as any,
+          analysisMeta: { mime_type: mime, voice_meta: voiceMeta } as any,
         } as any,
       });
       scores.push({ c: correctness, f: confidence });

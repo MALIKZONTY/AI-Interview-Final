@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Circle, Loader2, Sparkles, BrainCircuit, Play, ArrowRight, ShieldCheck, Clock, Zap, ClipboardList, Scan, Activity } from "lucide-react";
+import { Loader2, BrainCircuit, ShieldCheck, Clock, Zap, ClipboardList, Scan, Activity, Mic } from "lucide-react";
 import { api } from "@/lib/api";
 import {
   InterviewResultsView,
@@ -17,20 +17,22 @@ const THINK_SECONDS = 10;
 
 function pickMimeType(): string {
   const candidates = [
-    "video/webm;codecs=vp9,opus",
-    "video/webm;codecs=vp8,opus",
-    "video/webm",
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+    "audio/ogg;codecs=opus",
   ];
   for (const c of candidates) {
     if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(c)) {
       return c;
     }
   }
-  return "video/webm";
+  return "audio/webm";
 }
 
 /**
- * Timed interview: one MediaRecorder clip per question, auto-stops at 30s, uploads to API.
+ * Timed interview: one audio clip per question, auto-stops at 30s, uploaded to the API.
+ * Nothing is captured from the camera — scoring is transcript + vocal delivery only.
  */
 export function InterviewSessionPage() {
   const navigate = useNavigate();
@@ -38,9 +40,12 @@ export function InterviewSessionPage() {
   const questions = useInterviewStore((s) => s.questions);
   const clearSession = useInterviewStore((s) => s.clearSession);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const [levels, setLevels] = useState<number[]>(() => new Array(28).fill(0));
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const armTokenRef = useRef(0);
 
@@ -65,6 +70,9 @@ export function InterviewSessionPage() {
   const cleanupStream = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    analyserRef.current = null;
+    void audioCtxRef.current?.close().catch(() => {});
+    audioCtxRef.current = null;
     setStreamReady(false);
   }, []);
 
@@ -79,26 +87,37 @@ export function InterviewSessionPage() {
     async function media() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { 
-            facingMode: "user",
-            width: { min: 320, ideal: 640, max: 640 },
-            height: { min: 240, ideal: 480, max: 480 },
-            frameRate: { ideal: 20, max: 24 }
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: false, // keep true loudness — projection feeds the confidence score
           },
-          audio: true,
         });
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
           return;
         }
         streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
+
+        // Analyser drives the on-screen level meter only; no audio is sent anywhere from here.
+        try {
+          const Ctx =
+            window.AudioContext ||
+            (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+          const ctx = new Ctx();
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 256;
+          analyser.smoothingTimeConstant = 0.75;
+          ctx.createMediaStreamSource(stream).connect(analyser);
+          audioCtxRef.current = ctx;
+          analyserRef.current = analyser;
+        } catch {
+          // Meter is decorative; a missing AudioContext must not block the interview.
         }
+
         setStreamReady(true);
       } catch {
-        setMediaError("Connection Denied: Camera and Microphone permissions are required for the session.");
+        setMediaError("Microphone access is required for the session. Please allow it and reload.");
       }
     }
 
@@ -112,8 +131,6 @@ export function InterviewSessionPage() {
     };
   }, [interviewId, questions.length, navigate, cleanupStream]);
 
-  const wsRef = useRef<WebSocket | null>(null);
-
   const stopRecordingAndUpload = useCallback(async () => {
     const rec = recorderRef.current;
     if (timerRef.current) {
@@ -125,33 +142,33 @@ export function InterviewSessionPage() {
     }
 
     setPhase("uploading");
-    setResultsStatus("Syncing Session Data...");
+    setResultsStatus("Uploading your answer...");
 
-    await new Promise<void>((resolve) => {
+    // Wait for the recorder to flush its final chunk before assembling the blob.
+    const blob = await new Promise<Blob>((resolve) => {
       rec.onstop = () => {
-        setTimeout(() => resolve(), 8000); // Buffer for cloud sync
+        resolve(new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" }));
       };
-      if (rec.state !== "inactive") {
-        rec.stop();
-      } else {
-        setTimeout(() => resolve(), 8000);
-      }
+      rec.stop();
     });
 
+    if (blob.size < 2000) {
+      setError("No audio was captured. Check your microphone and try again.");
+      setPhase("arm");
+      return;
+    }
+
     try {
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-      
-      await api.post("/interview/submit", { 
-        interviewId, 
-        questionId: q?.id 
+      const form = new FormData();
+      form.append("interviewId", interviewId ?? "");
+      form.append("questionId", q?.id ?? "");
+      form.append("audio", blob, blob.type.includes("mp4") ? "answer.m4a" : "answer.webm");
+      await api.post("/interview/submit", form, {
+        headers: { "Content-Type": "multipart/form-data" },
       });
-      
     } catch (err) {
-      console.error("Session sync error:", err);
-      setError("Recording failed to sync. Connection interrupted.");
+      console.error("Answer upload failed:", err);
+      setError("Your answer could not be uploaded. Connection interrupted.");
       setPhase("arm");
       return;
     }
@@ -176,56 +193,20 @@ export function InterviewSessionPage() {
     if (!stream || !q || !interviewId) return;
 
     setError(null);
-    const mimeType = pickMimeType();
-
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    let wsUrl = "";
-    const apiUrl = import.meta.env.VITE_API_URL || "";
-
-    if (apiUrl.startsWith("http")) {
-      wsUrl = apiUrl.replace(/^http/, protocol) + `/interview/stream?interviewId=${interviewId}&questionId=${q.id}`;
-    } else {
-      const host = window.location.host;
-      wsUrl = `${protocol}//${host}${apiUrl}/interview/stream?interviewId=${interviewId}&questionId=${q.id}`;
-    }
 
     try {
-      const chunksQueue: Blob[] = [];
-      let isWsReady = false;
-
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-      ws.binaryType = "arraybuffer";
-
-      ws.onopen = () => {
-        console.log("[session] Live feed connected successfully via " + (wsUrl.startsWith("wss") ? "Secure" : "Standard") + " tunnel");
-        isWsReady = true;
-        // Flush any chunks that were captured during the handshake
-        while (chunksQueue.length > 0) {
-          const chunk = chunksQueue.shift();
-          if (chunk) ws.send(chunk);
-        }
-      };
-
-      const rec = new MediaRecorder(stream, { 
-        mimeType,
-        videoBitsPerSecond: 1_200_000, // Slightly higher for remote clarity
-        audioBitsPerSecond: 128_000
+      const rec = new MediaRecorder(stream, {
+        mimeType: pickMimeType(),
+        audioBitsPerSecond: 128_000,
       });
       recorderRef.current = rec;
+      chunksRef.current = [];
 
       rec.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          if (isWsReady && ws.readyState === WebSocket.OPEN) {
-            ws.send(e.data);
-          } else {
-            // Buffer the critical video header and early chunks until connection is established
-            chunksQueue.push(e.data);
-          }
-        }
+        if (e.data.size > 0) chunksRef.current.push(e.data);
       };
 
-      rec.start(200); // 200ms chunks are more stable for tunneled streaming
+      rec.start(1000);
       setPhase("recording");
       setSecondsLeft(ANSWER_SECONDS);
 
@@ -242,7 +223,8 @@ export function InterviewSessionPage() {
         });
       }, 1000);
     } catch (e) {
-      setError("Connection Error: Could not establish live interview feed.");
+      console.error("MediaRecorder failed to start:", e);
+      setError("Could not start recording. Your browser may not support audio capture.");
     }
   }, [q, stopRecordingAndUpload, interviewId]);
 
@@ -277,6 +259,35 @@ export function InterviewSessionPage() {
       clearTimeout(t);
     };
   }, [streamReady, mediaError, index, phase, q, startQuestionRecording]);
+
+  useEffect(() => {
+    const analyser = analyserRef.current;
+    if (!analyser || (phase !== "recording" && phase !== "reading")) {
+      setLevels((prev) => (prev.some((v) => v > 0) ? new Array(28).fill(0) : prev));
+      return;
+    }
+
+    const bins = new Uint8Array(analyser.frequencyBinCount);
+    let raf = 0;
+
+    const tick = () => {
+      analyser.getByteFrequencyData(bins);
+      // Fold the spectrum into 28 bars, weighted toward speech frequencies.
+      const usable = Math.floor(bins.length * 0.6);
+      const per = Math.max(1, Math.floor(usable / 28));
+      const next = new Array(28);
+      for (let i = 0; i < 28; i += 1) {
+        let sum = 0;
+        for (let j = 0; j < per; j += 1) sum += bins[i * per + j] ?? 0;
+        next[i] = Math.min(1, sum / per / 190);
+      }
+      setLevels(next);
+      raf = requestAnimationFrame(tick);
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [phase]);
 
   useEffect(() => {
     if (phase !== "generating" || !interviewId) return;
@@ -400,6 +411,24 @@ export function InterviewSessionPage() {
     );
   }
 
+  if (mediaError) {
+    return (
+      <div className="mx-auto flex min-h-[70vh] max-w-lg flex-col items-center justify-center px-4 text-center">
+        <div className="mb-8 flex h-20 w-20 items-center justify-center rounded-[1.75rem] border border-destructive/20 bg-destructive/5">
+          <Mic className="h-9 w-9 text-destructive" />
+        </div>
+        <h2 className="font-display text-3xl font-bold tracking-tight mb-4">Microphone Unavailable</h2>
+        <p className="text-base text-muted-foreground leading-relaxed mb-10">{mediaError}</p>
+        <Button
+          className="h-14 w-full rounded-2xl font-bold uppercase tracking-widest"
+          onClick={() => window.location.reload()}
+        >
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
   if (!q) return null;
 
   const progressPct = ((index + (phase === "uploading" ? 0.5 : 0)) / questions.length) * 100;
@@ -436,21 +465,56 @@ export function InterviewSessionPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
-        {/* Widescreen Video Intelligence Feed */}
+        {/* Voice capture feed */}
         <div className="lg:col-span-8 space-y-10">
           <div className="relative group">
             {/* Visual glow backdrop */}
             <div className="absolute -inset-1 bg-primary/10 rounded-[3rem] blur-2xl opacity-20 transition-opacity group-hover:opacity-30"></div>
             
             <Card className="relative overflow-hidden border-border bg-black rounded-[3rem] shadow-2xl aspect-video border-[4px] border-black transition-all">
-                <video 
-                  ref={videoRef} 
-                  className="h-full w-full object-cover -scale-x-100 transition-all duration-1000" 
-                  playsInline 
-                  muted 
-                  autoPlay 
+                <div
+                  className="flex h-full w-full flex-col items-center justify-center gap-10 bg-gradient-to-b from-neutral-900 to-black transition-all duration-1000"
                   style={{ opacity: phase === "uploading" ? 0.4 : 1, filter: phase === "uploading" ? "blur(4px)" : "none" }}
-                />
+                >
+                  {/* Mic orb — pulses with the loudest current band */}
+                  <div className="relative flex items-center justify-center">
+                    <div
+                      className="absolute rounded-full bg-primary/30 blur-2xl transition-transform duration-100"
+                      style={{
+                        width: 150,
+                        height: 150,
+                        transform: `scale(${1 + Math.max(...levels, 0) * 0.85})`,
+                        opacity: phase === "recording" ? 0.85 : 0.3,
+                      }}
+                    />
+                    <div className="relative z-10 flex h-28 w-28 items-center justify-center rounded-full border border-white/15 bg-white/5 backdrop-blur-sm">
+                      <Mic
+                        className={`h-11 w-11 ${phase === "recording" ? "text-white" : "text-white/40"}`}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Live level bars */}
+                  <div className="flex h-24 items-end gap-1.5" aria-hidden>
+                    {levels.map((v, i) => (
+                      <div
+                        key={i}
+                        className={`w-2 rounded-full transition-[height] duration-75 ${
+                          phase === "recording" ? "bg-primary" : "bg-white/15"
+                        }`}
+                        style={{ height: `${Math.max(4, v * 96)}px` }}
+                      />
+                    ))}
+                  </div>
+
+                  <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/35">
+                    {phase === "recording"
+                      ? "Listening to your answer"
+                      : phase === "reading"
+                        ? "Take a moment to think"
+                        : "Microphone ready"}
+                  </p>
+                </div>
 
                 {/* Corner Accents (The 'Wow' Factor) */}
                 <div className="absolute top-8 left-8 w-12 h-12 border-l-2 border-t-2 border-white/20 rounded-tl-xl pointer-events-none"></div>
@@ -567,7 +631,7 @@ export function InterviewSessionPage() {
                 ) : (
                   <div className="space-y-10 animate-in fade-in duration-1000">
                     <div className="p-6 rounded-2xl bg-muted/40 border border-border flex items-center justify-between shadow-inner">
-                       <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest ml-1 opacity-70">Capture Feed Active</span>
+                       <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest ml-1 opacity-70">Microphone Active</span>
                        <div className="flex gap-2">
                            <div className="w-2 h-2 rounded-full bg-primary/30 animate-pulse"></div>
                            <div className="w-2 h-2 rounded-full bg-primary/50 animate-pulse [animation-delay:0.3s]"></div>
@@ -578,10 +642,10 @@ export function InterviewSessionPage() {
                     <div className="space-y-6">
                         <div className="flex items-center gap-3 text-emerald-600/60">
                             <ShieldCheck className="h-5 w-5" />
-                            <span className="text-[11px] font-black uppercase tracking-[0.2em]">Quality Assurance Sync</span>
+                            <span className="text-[11px] font-black uppercase tracking-[0.2em]">Delivery Analysis</span>
                         </div>
                         <p className="text-base font-medium text-muted-foreground leading-relaxed">
-                            Maintain consistent volume and professional posture. Your behavioral signals are being indexed.
+                            Speak clearly and at a steady pace. Your pace, pauses and tone are being measured.
                         </p>
                     </div>
                   </div>

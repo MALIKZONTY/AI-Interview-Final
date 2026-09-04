@@ -2,7 +2,6 @@ import "dotenv/config";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
-import websocket from "@fastify/websocket";
 import jwtAuthPlugin from "./plugins/jwtAuth.js";
 import authRoutes from "./routes/auth.js";
 import uploadRoutes from "./routes/upload.js";
@@ -37,12 +36,10 @@ await app.register(cors, {
   allowedHeaders: ["Content-Type", "Authorization"],
 });
 
-/** Large bodies for resume PDF + answer recordings */
+/** Large bodies for resume PDF + answer audio */
 await app.register(multipart, {
   limits: { fileSize: 80 * 1024 * 1024 },
 });
-
-await app.register(websocket);
 
 await app.register(jwtAuthPlugin);
 

@@ -1,19 +1,26 @@
 from __future__ import annotations
 """
-Local speech-to-text using faster-whisper (pretrained Whisper weights, runs on CPU/GPU).
-No OpenAI or other paid APIs. FFmpeg converts tricky WebM clips to WAV when needed.
+Speech-to-text for answer audio, plus the vocal delivery metrics derived from it.
 
-First run downloads model weights from Hugging Face (size set by WHISPER_MODEL_SIZE).
+Local faster-whisper (pretrained Whisper weights, CPU/GPU) runs first; Groq's hosted
+Whisper is the fallback. Segment timestamps are kept — they are what the confidence
+score is built from — and FFmpeg produces the 16kHz mono wav used for energy analysis.
+
+First local run downloads model weights from Hugging Face (size set by WHISPER_MODEL_SIZE).
 """
 
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Any
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, Form, UploadFile
 from openai import AsyncOpenAI
+
+from app.voice import extract_metrics
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -25,29 +32,22 @@ client = AsyncOpenAI(
 )
 
 
+def _ffmpeg_bin() -> str:
+    if shutil.which("ffmpeg"):
+        return "ffmpeg"
+    for p in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"):
+        if os.path.exists(p):
+            return p
+    return "ffmpeg"
+
+
 def _ffmpeg_to_wav(src: Path) -> Path | None:
+    """Decodes any container to 16kHz mono PCM wav (audio only)."""
     dst = src.with_suffix(".wav")
-    
-    # Try to find ffmpeg in common macOS / Linux paths if not in PATH
-    ffmpeg_cmd = "ffmpeg"
-    common_paths = [
-        "/opt/homebrew/bin/ffmpeg",
-        "/usr/local/bin/ffmpeg",
-        "/usr/bin/ffmpeg",
-    ]
-    
-    # Check if 'ffmpeg' is in PATH first
-    import shutil
-    if not shutil.which("ffmpeg"):
-        for p in common_paths:
-            if os.path.exists(p):
-                ffmpeg_cmd = p
-                break
-    
     try:
         subprocess.run(
             [
-                ffmpeg_cmd,
+                _ffmpeg_bin(),
                 "-y",
                 "-i",
                 str(src),
@@ -66,11 +66,11 @@ def _ffmpeg_to_wav(src: Path) -> Path | None:
         )
         return dst
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
-        logger.warning("ffmpeg wav extract failed (cmd=%s): %s", ffmpeg_cmd, e)
+        logger.warning("ffmpeg wav extract failed: %s", e)
         return None
 
 
-def _transcribe_faster_whisper(path: Path) -> str | None:
+def _transcribe_faster_whisper(path: Path) -> tuple[str, list[dict[str, Any]]] | None:
     try:
         from faster_whisper import WhisperModel
     except ImportError:
@@ -94,91 +94,134 @@ def _transcribe_faster_whisper(path: Path) -> str | None:
             vad_filter=True,
             language="en",
         )
-        text = " ".join(s.text.strip() for s in segments).strip()
-        return text or None
+        segs = [
+            {"start": float(s.start), "end": float(s.end), "text": s.text.strip()}
+            for s in segments
+        ]
     except Exception as e:
         logger.warning("faster_whisper transcribe failed: %s", e)
         return None
 
+    text = " ".join(s["text"] for s in segs).strip()
+    return (text, segs) if text else None
 
-def _transcribe_openai_whisper_pkg(path: Path) -> str | None:
+
+def _transcribe_openai_whisper_pkg(path: Path) -> tuple[str, list[dict[str, Any]]] | None:
     """Optional fallback if `openai-whisper` (PyTorch) is installed separately."""
     try:
         import whisper  # type: ignore
     except ImportError:
         return None
     try:
-        model_name = os.getenv("WHISPER_MODEL", "base")
-        model = whisper.load_model(model_name)
+        model = whisper.load_model(os.getenv("WHISPER_MODEL", "base"))
         result = model.transcribe(str(path), language="en")
-        return (result.get("text") or "").strip() or None
     except Exception as e:
         logger.warning("openai-whisper failed: %s", e)
         return None
 
-
-def _transcribe_file(path: Path) -> str:
-    t = _transcribe_faster_whisper(path)
-    if t:
-        return t
-
-    wav = _ffmpeg_to_wav(path)
-    if wav:
-        try:
-            t = _transcribe_faster_whisper(wav)
-            if t:
-                return t
-        finally:
-            try:
-                wav.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-    t = _transcribe_openai_whisper_pkg(path)
-    if t:
-        return t
-
-    logger.warning(
-        "Transcription empty: install faster-whisper (see requirements.txt) and ensure ffmpeg is on PATH."
-    )
-    return ""
+    text = (result.get("text") or "").strip()
+    if not text:
+        return None
+    segs = [
+        {
+            "start": float(s.get("start", 0.0)),
+            "end": float(s.get("end", 0.0)),
+            "text": (s.get("text") or "").strip(),
+        }
+        for s in result.get("segments") or []
+    ]
+    return text, segs
 
 
-async def _transcribe_cloud(path: Path) -> str | None:
-    """Uses Groq's Whisper API to transcribe the audio file."""
+async def _transcribe_cloud(path: Path) -> tuple[str, list[dict[str, Any]]] | None:
+    """Groq hosted Whisper. verbose_json so segment timestamps survive."""
     try:
         with open(path, "rb") as audio_file:
-            transcription = await client.audio.transcriptions.create(
+            res = await client.audio.transcriptions.create(
                 model="whisper-large-v3",
                 file=audio_file,
-                response_format="text",
-                language="en"
+                response_format="verbose_json",
+                language="en",
             )
-            return transcription
     except Exception as e:
         logger.warning("Cloud transcription failed: %s", e)
         return None
 
+    text = (getattr(res, "text", "") or "").strip()
+    if not text:
+        return None
+
+    segs: list[dict[str, Any]] = []
+    for s in getattr(res, "segments", None) or []:
+        get = s.get if isinstance(s, dict) else lambda k, d=None: getattr(s, k, d)
+        try:
+            segs.append(
+                {
+                    "start": float(get("start", 0.0) or 0.0),
+                    "end": float(get("end", 0.0) or 0.0),
+                    "text": (get("text", "") or "").strip(),
+                }
+            )
+        except (TypeError, ValueError):
+            continue
+    return text, segs
+
+
+async def _transcribe(source: Path, wav: Path | None) -> tuple[str, list[dict[str, Any]]]:
+    """Local first (original container, then wav), cloud last."""
+    for candidate in (source, wav):
+        if candidate is None:
+            continue
+        got = _transcribe_faster_whisper(candidate)
+        if got:
+            return got
+
+    got = _transcribe_openai_whisper_pkg(wav or source)
+    if got:
+        return got
+
+    logger.info("Local transcription empty/failed; trying cloud...")
+    got = await _transcribe_cloud(wav or source)
+    if got:
+        return got
+
+    logger.warning(
+        "Transcription empty: install faster-whisper (see requirements.txt), ensure ffmpeg "
+        "is on PATH, or set OPENAI_API_KEY for the cloud fallback."
+    )
+    return "", []
+
 
 @router.post("/speech-to-text")
-async def speech_to_text(file: UploadFile = File(...)):
+async def speech_to_text(
+    file: UploadFile = File(...),
+    window_seconds: float | None = Form(None),
+):
+    """
+    Returns the transcript, Whisper segment timestamps, and voice_meta —
+    the vocal delivery metrics /evaluate-answer turns into a confidence score.
+    """
     suffix = Path(file.filename or "clip").suffix or ".webm"
     data = await file.read()
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(data)
         tmp_path = Path(tmp.name)
+
+    wav = _ffmpeg_to_wav(tmp_path)
     try:
-        # 1. Try local transcription first
-        text = _transcribe_file(tmp_path)
-        
-        # 2. If local fails (likely due to missing ffmpeg/faster-whisper), fall back to cloud
-        if not text:
-            logger.info("Local transcription empty/failed; trying cloud...")
-            text = await _transcribe_cloud(tmp_path)
-            
-        return {"text": text or ""}
+        text, segments = await _transcribe(tmp_path, wav)
+        voice_meta = extract_metrics(
+            text=text,
+            segments=segments,
+            wav_path=wav,
+            window_seconds=window_seconds,
+        )
+        return {"text": text, "segments": segments, "voice_meta": voice_meta}
     finally:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        for p in (tmp_path, wav):
+            if p is None:
+                continue
+            try:
+                p.unlink(missing_ok=True)
+            except OSError:
+                pass

@@ -3,7 +3,8 @@ from __future__ import annotations
 Scores answers using:
 - Correctness: alignment with expected answer AND relevance to the actual question (topic).
 - Semantic similarity (MiniLM) + TF-IDF + keyword overlap where available.
-- Confidence: gaze/face-center proxy, head stability (motion + drift), transcript fillers & pause-like patterns.
+- Confidence: vocal delivery only — pace, fillers, pauses, energy steadiness and projection.
+  See app/voice.py. No camera signal is involved anywhere in scoring.
 """
 
 import re
@@ -18,6 +19,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from app.parser import client
+from app.voice import confidence_from_voice
 
 router = APIRouter()
 
@@ -48,7 +50,7 @@ class EvaluateBody(BaseModel):
     evaluation_rubric: dict[str, Any] = {}
     candidate_answer: str
     speech_meta: dict[str, Any] | None = None
-    video_meta: dict[str, Any] | None = None
+    voice_meta: dict[str, Any] | None = None
 
 class LLMCorrectnessResult(BaseModel):
     correctness_score: float = Field(description="Score between 0 and 100")
@@ -238,88 +240,28 @@ async def evaluate_answer(body: EvaluateBody):
             },
         }
 
-    # 1. First, calculate all Behavioral Heuristics (Video + Speech)
-    # This allows us to pass delivery context to the LLM for natural feedback
-    # Helper to safely cast potential None/String to float
-    def safe_float(val, default):
-        if val is None: return float(default)
-        try: return float(val)
-        except: return float(default)
+    # 1. Vocal delivery first, so the LLM can speak to *how* the answer was given.
+    voice = dict(body.voice_meta or {})
 
-    vm = body.video_meta or {}
-    gaze = safe_float(vm.get("gaze_center_score", vm.get("eye_contact_proxy", 55)), 55)
-    eye = safe_float(vm.get("eyes_binary_proxy", 50), 50)
-    head = safe_float(vm.get("stability_score", 60), 60)
-    face = safe_float(vm.get("face_center_score", 0.5), 0.5)
-    pos_var = safe_float(vm.get("position_variance", 0.01), 0.01)
-    std_off = safe_float(vm.get("center_std_offset", 0.05), 0.05)
-    motion_signal = safe_float(vm.get("restlessness_proxy", 10.0), 10.0)
-    drift_pen = safe_float(vm.get("stability_drift_penalty", 0.0), 0.0)
-    moving = vm.get("is_moving_high", False)
-    mp_gaze = vm.get("mediapipe_gaze_used", False)
-    facing_cam = safe_float(vm.get("facing_camera_avg", -1.0), -1.0)
-    face_area_ratio = safe_float(vm.get("face_area_ratio_avg", -1.0), -1.0)
-
-    if moving:
-        if not mp_gaze or facing_cam < 0 or facing_cam >= 62.0:
-            drift_pen *= 0.84
-        else:
-            drift_pen *= 0.92
-
-    speech = _speech_delivery_from_text(cand)
+    # Text-derived fillers still apply when the audio pipeline gave us nothing to work with.
+    text_speech = _speech_delivery_from_text(cand)
+    if voice.get("word_count") is None:
+        voice["word_count"] = text_speech["word_count"]
+    if voice.get("filler_rate") is None:
+        voice["filler_rate"] = text_speech["filler_rate"]
     if body.speech_meta:
         try:
-            speech["filler_rate"] = max(
-                speech["filler_rate"],
+            voice["filler_rate"] = max(
+                float(voice.get("filler_rate") or 0.0),
                 float(body.speech_meta.get("filler_rate", 0)),
-            )
-            speech["pause_proxy"] = max(
-                speech["pause_proxy"],
-                float(body.speech_meta.get("pause_proxy", 0)),
             )
         except (TypeError, ValueError):
             pass
 
-    filler_rate = speech["filler_rate"]
-    pause_proxy = speech["pause_proxy"]
-    word_count = float(speech.get("word_count", 0.0))
+    confidence, voice_breakdown, behavioral_context = confidence_from_voice(voice)
 
-    # Gaze-heavy blend
-    gaze_component = 0.38 * eye + 0.30 * gaze
-    stability_component = 0.26 * head + 0.06 * min(100.0, face * 100.0)
-    confidence = gaze_component + stability_component
-    confidence = float(np.clip(confidence - drift_pen, 0, 100))
-
-    r_pos = (max(0.0, pos_var - 0.013) * 24.0) ** 0.9 * 0.44
-    r_mot = (max(0.0, motion_signal - 8.5) / 21.0) ** 1.05 * 0.48
-    r_std = (max(0.0, std_off - 0.048) / 0.095) ** 1.0 * 0.40
-    restlessness = min(1.0, r_pos + r_mot + r_std)
-    
-    engagement = (eye + gaze) / 200.0
-    if engagement >= 0.68:
-        restlessness *= 0.52 if (not mp_gaze or facing_cam < 0 or facing_cam >= 72.0) else 0.68
-    elif engagement >= 0.55:
-        restlessness *= 0.72 if (not mp_gaze or facing_cam < 0 or facing_cam >= 65.0) else 0.82
-    if engagement < 0.42 and restlessness > 0.14:
-        restlessness = min(1.0, restlessness * (1.12 + 0.5 * (0.42 - engagement)))
-    
-    confidence *= max(0.45, 1.0 - 0.40 * restlessness)
-    confidence = float(np.clip(confidence, 0, 100))
-
-    filler_pen = min(22.0, filler_rate * 0.62)
-    pause_pen = min(18.0, pause_proxy * 0.32)
-    gaze_floor = min(eye, gaze)
-    if engagement >= 0.60 and gaze_floor >= 58.0:
-        filler_pen *= 0.74
-        pause_pen *= 0.72
-    confidence = float(np.clip(confidence - filler_pen - pause_pen, 0, 100))
-
-    # Delivery context for LLM
-    behavioral_context = f"Confidence score: {round(confidence, 1)}/100. "
-    if engagement > 0.65: behavioral_context += "Maintained good eye contact. "
-    elif engagement < 0.45: behavioral_context += "Eye contact was a bit inconsistent. "
-    if filler_rate > 10: behavioral_context += "Used several filler words. "
-    if restlessness > 0.25: behavioral_context += "Appeared slightly restless. "
+    filler_rate = float(voice.get("filler_rate") or 0.0)
+    word_count = float(voice.get("word_count") or 0.0)
 
     # 2. Call LLM for Technical Correctness + Synthesis of Feedback
     llm_res = await _llm_correctness(body, behavioral_context)
@@ -359,16 +301,18 @@ async def evaluate_answer(body: EvaluateBody):
         {
             "relevance_to_question": relevance,
             "relevance_factor": rel_factor,
-            "filler_rate": filler_rate,
-            "pause_proxy": pause_proxy,
-            "drift_penalty": drift_pen,
-            "restlessness_factor": round(restlessness, 4),
-            "engagement_proxy": round(engagement, 4),
-            "face_area_ratio_avg": round(face_area_ratio, 5) if face_area_ratio >= 0 else None,
-            "facing_camera_avg": round(facing_cam, 2) if facing_cam >= 0 else None,
-            "gaze_mediapipe_used": mp_gaze,
-            "gaze_floor": round(gaze_floor, 2),
-            "motion_proxy_high": moving,
+            "word_count": word_count,
+            "filler_rate": round(filler_rate, 2),
+            "wpm": voice.get("wpm"),
+            "pause_count": voice.get("pause_count"),
+            "long_pause_count": voice.get("long_pause_count"),
+            "pause_ratio": voice.get("pause_ratio"),
+            "speaking_ratio": voice.get("speaking_ratio"),
+            "lead_in_seconds": voice.get("lead_in_seconds"),
+            "energy_mean": voice.get("energy_mean"),
+            "energy_cv": voice.get("energy_cv"),
+            "voice_breakdown": voice_breakdown,
+            "delivery_notes": behavioral_context,
         }
     )
     dbg_exp.update({f"q_{k}": v for k, v in dbg_q.items()})

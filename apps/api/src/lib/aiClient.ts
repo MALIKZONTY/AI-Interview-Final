@@ -29,17 +29,49 @@ export async function aiGenerateQuestions(params: {
   return data.questions;
 }
 
-export async function aiSpeechToText(audioBuffer: Buffer, mimeType: string): Promise<string> {
+export type VoiceMeta = Record<string, unknown> & {
+  word_count?: number;
+  wpm?: number | null;
+  filler_rate?: number;
+  pause_count?: number;
+  speaking_ratio?: number | null;
+  energy_mean?: number | null;
+  energy_cv?: number | null;
+};
+
+export type TranscriptionResult = {
+  text: string;
+  segments: { start: number; end: number; text: string }[];
+  voice_meta: VoiceMeta;
+};
+
+/**
+ * Transcribes answer audio and returns the vocal delivery metrics alongside it —
+ * both come from one pass so the wav is only decoded once.
+ */
+export async function aiSpeechToText(
+  audioBuffer: Buffer,
+  mimeType: string
+): Promise<TranscriptionResult> {
   const FormData = (await import("form-data")).default;
   const form = new FormData();
-  form.append("file", audioBuffer, { filename: "clip.webm", contentType: mimeType });
-  const { data } = await axios.post<{ text: string }>(`${base()}/speech-to-text`, form, {
-    headers: form.getHeaders(),
-    timeout: 300_000,
-    maxBodyLength: Infinity,
-    maxContentLength: Infinity,
-  });
-  return data.text ?? "";
+  const ext = mimeType.includes("mp4") ? "mp4" : "webm";
+  form.append("file", audioBuffer, { filename: `answer.${ext}`, contentType: mimeType });
+  const { data } = await axios.post<Partial<TranscriptionResult>>(
+    `${base()}/speech-to-text`,
+    form,
+    {
+      headers: form.getHeaders(),
+      timeout: 300_000,
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+    }
+  );
+  return {
+    text: data.text ?? "",
+    segments: data.segments ?? [],
+    voice_meta: data.voice_meta ?? {},
+  };
 }
 
 export async function aiEvaluateAnswer(body: {
@@ -50,7 +82,7 @@ export async function aiEvaluateAnswer(body: {
   evaluation_rubric: Record<string, unknown>;
   candidate_answer: string;
   speech_meta?: Record<string, unknown>;
-  video_meta?: Record<string, unknown>;
+  voice_meta?: Record<string, unknown>;
 }): Promise<{
   correctness_score: number;
   confidence_score: number;
@@ -62,39 +94,6 @@ export async function aiEvaluateAnswer(body: {
     debug?: Record<string, any>;
   }>(`${base()}/evaluate-answer`, body, { timeout: 300_000 });
   return data;
-}
-
-export async function aiAnalyzeVideo(videoBuffer: Buffer, mimeType: string): Promise<
-  Record<string, unknown> & {
-    face_detected_ratio: number;
-    eye_contact_proxy: number;
-    head_stability: number;
-    gaze_center_score?: number;
-    face_area_ratio_avg?: number;
-    gaze_mediapipe_used?: boolean;
-    face_position_variance?: number;
-    head_motion_mean?: number;
-  }
-> {
-  const FormData = (await import("form-data")).default;
-  const form = new FormData();
-  form.append("file", videoBuffer, { filename: "answer.webm", contentType: mimeType });
-  const { data } = await axios.post(`${base()}/analyze-video`, form, {
-    headers: form.getHeaders(),
-    timeout: 600_000,
-    maxBodyLength: Infinity,
-    maxContentLength: Infinity,
-  });
-    return data as Record<string, unknown> & {
-    face_detected_ratio: number;
-    eye_contact_proxy: number;
-    head_stability: number;
-    gaze_center_score?: number;
-    face_area_ratio_avg?: number;
-    gaze_mediapipe_used?: boolean;
-    face_position_variance?: number;
-    head_motion_mean?: number;
-  };
 }
 
 export async function aiGenerateSummaryFeedback(body: {
