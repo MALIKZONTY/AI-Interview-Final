@@ -13,7 +13,7 @@ export type ResultRow = {
     orderIndex: number;
     text: string;
     transcript: string | null;
-    recordingUrl: string | null;
+    hasRecording?: boolean;
     correctnessScore: number | null;
     confidenceScore: number | null;
     aiFeedback?: string | null;
@@ -188,9 +188,9 @@ export function InterviewResultsView({
                                             <TranscriptBlock transcript={r.transcript} />
                                         </div>
                                         <div className="space-y-3">
-                                            <Label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground ml-1">Video Recording</Label>
+                                            <Label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground ml-1">Answer Audio</Label>
                                             <div className="rounded-2xl border border-border overflow-hidden bg-muted/20">
-                                                <RecordingBlock url={r.recordingUrl} />
+                                                <RecordingBlock questionId={r.id} hasRecording={r.hasRecording} />
                                             </div>
                                         </div>
                                     </div>

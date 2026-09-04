@@ -81,6 +81,36 @@ export function InterviewSessionPage() {
     setStreamReady(false);
   }, []);
 
+
+  /**
+   * Runs a visible countdown and fires `onDone` once when it reaches zero.
+   *
+   * The callback must not live inside a setState updater: React StrictMode invokes
+   * updaters twice to surface impure ones, which previously started two
+   * MediaRecorders on the same stream. Both wrote into the same chunk array and
+   * corrupted the WebM header, so the answer could not be decoded or transcribed.
+   */
+  const runCountdown = useCallback((seconds: number, onDone: () => void) => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    setSecondsLeft(seconds);
+
+    const deadline = Date.now() + seconds * 1000;
+    let fired = false;
+
+    timerRef.current = setInterval(() => {
+      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setSecondsLeft(left);
+      if (left > 0 || fired) return;
+
+      fired = true;
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      onDone();
+    }, 250);
+  }, []);
+
   useEffect(() => {
     if (!interviewId || questions.length === 0) {
       navigate("/", { replace: true });
@@ -205,6 +235,8 @@ export function InterviewSessionPage() {
   const startQuestionRecording = useCallback(() => {
     const stream = streamRef.current;
     if (!stream || !q || !interviewId) return;
+    // Guard against any double-invocation starting a second recorder on this stream.
+    if (recorderRef.current && recorderRef.current.state !== "inactive") return;
 
     setError(null);
 
@@ -222,44 +254,20 @@ export function InterviewSessionPage() {
 
       rec.start(1000);
       setPhase("recording");
-      setSecondsLeft(ANSWER_SECONDS);
-
-      if (timerRef.current) clearInterval(timerRef.current);
-      timerRef.current = setInterval(() => {
-        setSecondsLeft((s) => {
-          if (s <= 1) {
-            if (timerRef.current) clearInterval(timerRef.current);
-            timerRef.current = null;
-            void stopRecordingAndUpload();
-            return 0;
-          }
-          return s - 1;
-        });
-      }, 1000);
+      runCountdown(ANSWER_SECONDS, () => {
+        void stopRecordingAndUpload();
+      });
     } catch (e) {
       console.error("MediaRecorder failed to start:", e);
       setError("Could not start recording. Your browser may not support audio capture.");
     }
-  }, [q, stopRecordingAndUpload, interviewId]);
+  }, [q, stopRecordingAndUpload, interviewId, runCountdown]);
 
   const startReadingPhase = useCallback(() => {
     if (!q) return;
     setPhase("reading");
-    setSecondsLeft(THINK_SECONDS);
-
-    if (timerRef.current) clearInterval(timerRef.current);
-    timerRef.current = setInterval(() => {
-      setSecondsLeft((s) => {
-        if (s <= 1) {
-          if (timerRef.current) clearInterval(timerRef.current);
-          timerRef.current = null;
-          startQuestionRecording();
-          return 0;
-        }
-        return s - 1;
-      });
-    }, 1000);
-  }, [q, startQuestionRecording]);
+    runCountdown(THINK_SECONDS, startQuestionRecording);
+  }, [q, startQuestionRecording, runCountdown]);
 
   // Kept in a ref so the ask sequence below can start the timer without taking a
   // dependency on it — re-running that effect mid-question would cut the voice off.

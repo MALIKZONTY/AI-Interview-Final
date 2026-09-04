@@ -292,6 +292,40 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ ok: true, message: "Processing started" });
   });
 
+  /**
+   * Streams a stored answer recording back to its owner. The stored locator may be a
+   * `local://` path, which the browser cannot fetch, so the file is always served
+   * through here rather than linked directly.
+   */
+  app.get("/answer-audio/:questionId", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { questionId } = request.params as { questionId: string };
+
+    const question = await prisma.question.findFirst({
+      where: { id: questionId, interview: { userId: request.userId } },
+      include: { responses: true },
+    });
+
+    const storageUrl = (question?.responses as any)?.storageUrl as string | undefined;
+    if (!question || !storageUrl) {
+      return reply.status(404).send({ error: "No recording stored for this answer" });
+    }
+
+    let buffer: Buffer;
+    try {
+      buffer = await storageFetch(storageUrl);
+    } catch (e) {
+      request.log.error({ err: e }, `[answer-audio] could not read ${storageUrl}`);
+      return reply.status(410).send({ error: "Recording is no longer available" });
+    }
+
+    const meta = ((question.responses as any)?.analysisMeta as Record<string, any>) || {};
+    return reply
+      .header("Content-Type", meta.mime_type || "audio/webm")
+      .header("Content-Length", String(buffer.length))
+      .header("Cache-Control", "private, max-age=3600")
+      .send(buffer);
+  });
+
   app.get("/results/:id", { preHandler: [app.authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const interview = await prisma.interview.findFirst({
@@ -326,7 +360,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
           orderIndex: q.orderIndex,
           text: q.text,
           transcript: r?.transcript,
-          recordingUrl: (r as any)?.storageUrl ?? null,
+          hasRecording: Boolean((r as any)?.storageUrl),
           correctnessScore: r?.correctnessScore,
           confidenceScore: r?.confidenceScore,
           aiFeedback: (r as any)?.aiFeedback,
@@ -393,7 +427,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
           orderIndex: q.orderIndex,
           text: q.text,
           transcript: r?.transcript,
-          recordingUrl: (r as any)?.storageUrl ?? null,
+          hasRecording: Boolean((r as any)?.storageUrl),
           correctnessScore: r?.correctnessScore,
           confidenceScore: r?.confidenceScore,
           aiFeedback: (r as any)?.aiFeedback,
