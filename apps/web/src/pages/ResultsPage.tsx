@@ -67,7 +67,7 @@ export function ResultsPage() {
 
   if (loading) {
     return (
-      <div className="flex justify-center py-24 text-muted-foreground gap-2">
+      <div className="mx-auto w-full max-w-[1600px] flex justify-center py-24 text-muted-foreground gap-2">
         <Loader2 className="h-5 w-5 animate-spin" /> Loading results…
       </div>
     );

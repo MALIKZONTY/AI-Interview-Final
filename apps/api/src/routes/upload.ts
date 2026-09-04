@@ -1,8 +1,9 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { cloudinary } from "../lib/cloudinary.js";
+import { storageUpload } from "../lib/supabase.js";
 import { prisma } from "../lib/prisma.js";
 import { Readable } from "node:stream";
+import pdf from "pdf-parse/lib/pdf-parse.js";
 
 const jdSchema = z.object({
   text: z.string().min(10),
@@ -45,43 +46,45 @@ const uploadRoutes: FastifyPluginAsync = async (app) => {
     const buffer = Buffer.concat(chunks);
 
     try {
-      const uploaded = await new Promise<{
-        secure_url: string;
-        public_id: string;
-      }>((resolve, reject) => {
-        const stream = cloudinary.uploader.upload_stream(
-          {
-            folder: "interview/resumes",
-            resource_type: "raw",
-            format: "pdf",
-          },
-          (err, result) => {
-            if (err || !result) reject(err ?? new Error("Upload failed"));
-            else resolve(result as { secure_url: string; public_id: string });
-          }
-        );
-        Readable.from(buffer).pipe(stream);
-      });
+      // 1. Extract text from PDF buffer
+      let contentText: string | null = null;
+      try {
+        const data = await pdf(buffer);
+        contentText = data.text;
+      } catch (err) {
+        console.error("PDF parsing failed", err);
+      }
 
-      const resume = await prisma.resume.upsert({
+      let uploaded;
+      try {
+        const path = `resumes/${request.userId}_${Date.now()}.pdf`;
+        uploaded = await storageUpload("interview", path, buffer, "application/pdf");
+      } catch (e) {
+        console.error("[upload] Supabase upload failed:", e);
+        throw e;
+      }
+
+      const resume = await (prisma.resume as any).upsert({
         where: { userId: request.userId },
         create: {
           userId: request.userId,
-          cloudinaryPublicId: uploaded.public_id,
-          url: uploaded.secure_url,
+          storagePath: uploaded.path,
+          url: uploaded.url,
           fileName: file.filename ?? "resume.pdf",
-        },
+          contentText,
+        } as any,
         update: {
-          cloudinaryPublicId: uploaded.public_id,
-          url: uploaded.secure_url,
+          storagePath: uploaded.path,
+          url: uploaded.url,
           fileName: file.filename ?? "resume.pdf",
-        },
+          contentText,
+        } as any,
       });
 
       return reply.send({ resume });
     } catch (e) {
       console.error(e);
-      return reply.status(500).send({ error: "Cloudinary upload failed. Check CLOUDINARY_* env." });
+      return reply.status(500).send({ error: "Supabase upload failed. Check SUPABASE_* env." });
     }
   });
 };

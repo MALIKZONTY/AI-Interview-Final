@@ -1,0 +1,23 @@
+services:
+  # 1. Node.js Backend API
+  - type: web
+    name: ai-interview-api
+    env: node
+    rootDir: apps/api
+    buildCommand: pnpm install && pnpm run build
+    startCommand: pnpm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false # Set in Render Dashboard
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: AI_SERVICE_URL
+        sync: false # Set in Render Dashboard to your Hugging Face Space URL

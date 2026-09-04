@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Video analysis: MediaPipe Face Mesh + iris gaze when available; OpenCV Haar fallback.
 Metrics feed /evaluate-answer for confidence scoring.

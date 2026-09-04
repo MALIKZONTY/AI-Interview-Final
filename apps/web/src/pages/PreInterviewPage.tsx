@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Camera, Mic, ShieldAlert } from "lucide-react";
+import { Camera, Mic, ShieldAlert, ArrowRight, X, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { useInterviewStore } from "@/store/interviewStore";
 
 /**
@@ -45,7 +46,7 @@ export function PreInterviewPage() {
         setReady(true);
       } catch {
         setError(
-          "Could not access camera or microphone. Allow permissions in your browser and try again."
+          "Access Denied: Camera and Microphone permissions are required to start the session. Please enable them in your browser settings."
         );
       }
     }
@@ -60,77 +61,110 @@ export function PreInterviewPage() {
   }, [interviewId, questions.length, navigate]);
 
   function goInterview() {
-    const s = streamRef.current;
-    if (s) {
-      // Pass stream to session via a tiny module — we stop stream on prep unmount,
-      // so session page will request fresh media. User clicks Start there again for clarity.
-      navigate("/interview/session");
-    }
+    navigate("/interview/session");
   }
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6 animate-slide-up">
-      <div>
-        <h1 className="font-display text-2xl font-bold">Before you begin</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          We need your camera and microphone for video answers ({questions.length} questions, 30s
-          each).
-        </p>
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Card className="border-border/80">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Camera className="h-4 w-4" /> Camera
-            </CardTitle>
-            <CardDescription>Used for confidence cues (presence, stability).</CardDescription>
-          </CardHeader>
-        </Card>
-        <Card className="border-border/80">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Mic className="h-4 w-4" /> Microphone
-            </CardTitle>
-            <CardDescription>Your answer is transcribed for scoring.</CardDescription>
-          </CardHeader>
-        </Card>
-      </div>
-
-      <Card className="overflow-hidden border-border/80">
-        <CardContent className="p-0">
-          <div className="aspect-video bg-black/90 flex items-center justify-center relative">
-            <video
-              ref={videoRef}
-              className="h-full w-full object-cover"
-              playsInline
-              muted
-              autoPlay
-            />
-            {!ready && !error && (
-              <span className="absolute text-sm text-white/80">Requesting permissions…</span>
-            )}
+    <div className="max-w-[1400px] mx-auto space-y-12 animate-slide-up pb-20 mt-10 px-8">
+      {/* Header section */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
+          <div className="space-y-3">
+            <Badge variant="outline" className="px-3 py-1 rounded-full border-primary/20 bg-primary/5 text-primary text-[10px] font-bold uppercase tracking-widest">
+                Interview Readiness
+            </Badge>
+            <h1 className="font-display text-4xl font-bold tracking-tight text-foreground">
+                Prepare Your Environment
+            </h1>
+            <p className="text-muted-foreground font-medium text-lg max-w-xl">
+                Please ensure your equipment is functioning correctly. You are about to start a {questions.length}-question interview session.
+            </p>
           </div>
-        </CardContent>
-      </Card>
+          <Button variant="ghost" size="icon" onClick={() => navigate("/")} className="rounded-full hover:bg-destructive/10 hover:text-destructive">
+            <X className="h-6 w-6" />
+          </Button>
+      </div>
 
-      {error && (
-        <div
-          className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100"
-          role="alert"
-        >
-          <ShieldAlert className="h-5 w-5 shrink-0" />
-          {error}
+      <div className="grid lg:grid-cols-12 gap-8 items-start">
+        {/* Requirement Cards */}
+        <div className="lg:col-span-4 space-y-6">
+            <Card className="border-border bg-card shadow-sm rounded-3xl overflow-hidden">
+                <CardHeader className="pb-6">
+                    <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center mb-4">
+                        <Camera className="h-5 w-5 text-primary" />
+                    </div>
+                    <CardTitle className="text-xl font-bold tracking-tight">Camera Feed</CardTitle>
+                    <CardDescription className="text-xs font-medium">Verify your framing and lighting for optimal video clarity during the session.</CardDescription>
+                </CardHeader>
+            </Card>
+
+            <Card className="border-border bg-card shadow-sm rounded-3xl overflow-hidden">
+                <CardHeader className="pb-6">
+                    <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center mb-4">
+                        <Mic className="h-5 w-5 text-primary" />
+                    </div>
+                    <CardTitle className="text-xl font-bold tracking-tight">Audio Feed</CardTitle>
+                    <CardDescription className="text-xs font-medium">Ensure your microphone is capturing clear audio for accurate analysis.</CardDescription>
+                </CardHeader>
+            </Card>
+
+            <div className="p-6 rounded-3xl bg-muted/30 border border-border">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground leading-relaxed">
+                    A quiet, well-lit environment is recommended to ensure the highest quality feedback.
+                </p>
+            </div>
         </div>
-      )}
 
-      <div className="flex gap-3 justify-end">
-        <Button variant="outline" onClick={() => navigate("/")}>
-          Cancel
-        </Button>
-        <Button onClick={goInterview} disabled={!ready}>
-          Start interview
-        </Button>
+        {/* Preview Area */}
+        <div className="lg:col-span-8 space-y-8">
+            <Card className="overflow-hidden border-border bg-black shadow-lg rounded-[2.5rem] relative aspect-video group">
+                <div className="absolute inset-0 z-0 bg-gradient-to-br from-primary/10 to-transparent opacity-30"></div>
+                <video
+                  ref={videoRef}
+                  className="relative z-10 h-full w-full object-cover transition-opacity duration-1000"
+                  playsInline
+                  muted
+                  autoPlay
+                  style={{ opacity: ready ? 1 : 0 }}
+                />
+                
+                {!ready && !error && (
+                  <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-background/80 backdrop-blur-md">
+                     <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                     <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Initialising Equipment...</p>
+                  </div>
+                )}
+
+                {ready && (
+                    <div className="absolute top-6 left-6 z-20">
+                        <Badge className="bg-emerald-600 text-white border-none py-1.5 px-4 rounded-full text-[10px] font-bold tracking-widest flex items-center gap-2 shadow-lg shadow-emerald-500/20">
+                            <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></div>
+                            EQUIPMENT ACTIVE
+                        </Badge>
+                    </div>
+                )}
+            </Card>
+
+            {error && (
+                <div className="p-6 rounded-3xl border border-destructive/20 bg-destructive/5 text-destructive animate-shake shadow-sm">
+                    <div className="flex items-center gap-3 mb-2">
+                        <ShieldAlert className="h-5 w-5" />
+                        <span className="text-[11px] font-bold uppercase tracking-widest">Hardware Alert</span>
+                    </div>
+                    <p className="text-xs font-medium leading-relaxed">{error}</p>
+                </div>
+            )}
+
+            <div className="flex gap-4 justify-end pt-4">
+                <Button 
+                    className="h-14 rounded-2xl px-12 text-sm font-bold shadow-lg shadow-primary/20 group transition-all active:scale-95 bg-primary hover:bg-primary/90 text-primary-foreground" 
+                    onClick={goInterview} 
+                    disabled={!ready}
+                >
+                    <span className="tracking-widest uppercase">Proceed to Session</span>
+                    <ArrowRight className="h-5 w-5 ml-4 transition-transform group-hover:translate-x-1.5" />
+                </Button>
+            </div>
+        </div>
       </div>
     </div>
   );

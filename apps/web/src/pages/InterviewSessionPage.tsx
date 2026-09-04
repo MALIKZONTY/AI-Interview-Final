@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Circle, Loader2, Sparkles } from "lucide-react";
+import { Circle, Loader2, Sparkles, BrainCircuit, Play, ArrowRight, ShieldCheck, Clock, Zap, ClipboardList, Scan, Activity } from "lucide-react";
 import { api } from "@/lib/api";
 import {
   InterviewResultsView,
@@ -9,11 +9,11 @@ import {
 } from "@/components/InterviewResultsView";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { useInterviewStore } from "@/store/interviewStore";
 
 const ANSWER_SECONDS = 30;
+const THINK_SECONDS = 10;
 
 function pickMimeType(): string {
   const candidates = [
@@ -41,20 +41,18 @@ export function InterviewSessionPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<BlobPart[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  /** Bumps on effect cleanup so React Strict Mode double-mount does not double-start recording. */
   const armTokenRef = useRef(0);
 
   const [index, setIndex] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(ANSWER_SECONDS);
   const [phase, setPhase] = useState<
-    "arm" | "recording" | "uploading" | "generating" | "results"
+    "arm" | "reading" | "recording" | "uploading" | "generating" | "results"
   >("arm");
   const [streamReady, setStreamReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mediaError, setMediaError] = useState<string | null>(null);
-  const [genMessage, setGenMessage] = useState("Generating your results…");
+  const [genMessage, setGenMessage] = useState("Generating evaluation...");
   const [genFailed, setGenFailed] = useState(false);
   const [resultSummary, setResultSummary] = useState<ResultSummary>(null);
   const [resultRows, setResultRows] = useState<ResultRow[]>([]);
@@ -81,7 +79,12 @@ export function InterviewSessionPage() {
     async function media() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user" },
+          video: { 
+            facingMode: "user",
+            width: { min: 320, ideal: 640, max: 640 },
+            height: { min: 240, ideal: 480, max: 480 },
+            frameRate: { ideal: 20, max: 24 }
+          },
           audio: true,
         });
         if (cancelled) {
@@ -95,7 +98,7 @@ export function InterviewSessionPage() {
         }
         setStreamReady(true);
       } catch {
-        setMediaError("Camera/microphone required to continue the interview.");
+        setMediaError("Connection Denied: Camera and Microphone permissions are required for the session.");
       }
     }
 
@@ -109,6 +112,8 @@ export function InterviewSessionPage() {
     };
   }, [interviewId, questions.length, navigate, cleanupStream]);
 
+  const wsRef = useRef<WebSocket | null>(null);
+
   const stopRecordingAndUpload = useCallback(async () => {
     const rec = recorderRef.current;
     if (timerRef.current) {
@@ -120,28 +125,33 @@ export function InterviewSessionPage() {
     }
 
     setPhase("uploading");
+    setResultsStatus("Syncing Session Data...");
 
     await new Promise<void>((resolve) => {
-      rec.onstop = () => resolve();
-      rec.stop();
+      rec.onstop = () => {
+        setTimeout(() => resolve(), 8000); // Buffer for cloud sync
+      };
+      if (rec.state !== "inactive") {
+        rec.stop();
+      } else {
+        setTimeout(() => resolve(), 8000);
+      }
     });
 
-    const blob = new Blob(chunksRef.current, { type: rec.mimeType });
-    chunksRef.current = [];
-
-    const fd = new FormData();
-    fd.append("interviewId", interviewId!);
-    fd.append("questionId", q.id);
-    fd.append("video", blob, "answer.webm");
-
     try {
-      await api.post("/interview/submit", fd, {
-        headers: { "Content-Type": "multipart/form-data" },
-        maxBodyLength: Infinity,
-        maxContentLength: Infinity,
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      
+      await api.post("/interview/submit", { 
+        interviewId, 
+        questionId: q?.id 
       });
-    } catch {
-      setError("Upload failed. Check your connection and try again from the dashboard.");
+      
+    } catch (err) {
+      console.error("Session sync error:", err);
+      setError("Recording failed to sync. Connection interrupted.");
       setPhase("arm");
       return;
     }
@@ -150,31 +160,96 @@ export function InterviewSessionPage() {
       cleanupStream();
       setGenFailed(false);
       kickoffSent.current = false;
-      setGenMessage("Generating your results — transcripts, scores, and video signals…");
+      setGenMessage("Calculating performance metrics and scoring responses...");
       setPhase("generating");
       return;
     }
 
     setIndex((i) => i + 1);
-    setSecondsLeft(ANSWER_SECONDS);
+    setSecondsLeft(THINK_SECONDS);
     setPhase("arm");
+    setResultsStatus("");
   }, [cleanupStream, interviewId, isLast, q?.id]);
 
   const startQuestionRecording = useCallback(() => {
     const stream = streamRef.current;
-    if (!stream || !q) return;
+    if (!stream || !q || !interviewId) return;
 
     setError(null);
-    chunksRef.current = [];
     const mimeType = pickMimeType();
-    const rec = new MediaRecorder(stream, { mimeType });
-    recorderRef.current = rec;
-    rec.ondataavailable = (e) => {
-      if (e.data.size > 0) chunksRef.current.push(e.data);
-    };
-    rec.start(250);
-    setPhase("recording");
-    setSecondsLeft(ANSWER_SECONDS);
+
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    let wsUrl = "";
+    const apiUrl = import.meta.env.VITE_API_URL || "";
+
+    if (apiUrl.startsWith("http")) {
+      wsUrl = apiUrl.replace(/^http/, protocol) + `/interview/stream?interviewId=${interviewId}&questionId=${q.id}`;
+    } else {
+      const host = window.location.host;
+      wsUrl = `${protocol}//${host}${apiUrl}/interview/stream?interviewId=${interviewId}&questionId=${q.id}`;
+    }
+
+    try {
+      const chunksQueue: Blob[] = [];
+      let isWsReady = false;
+
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+      ws.binaryType = "arraybuffer";
+
+      ws.onopen = () => {
+        console.log("[session] Live feed connected successfully via " + (wsUrl.startsWith("wss") ? "Secure" : "Standard") + " tunnel");
+        isWsReady = true;
+        // Flush any chunks that were captured during the handshake
+        while (chunksQueue.length > 0) {
+          const chunk = chunksQueue.shift();
+          if (chunk) ws.send(chunk);
+        }
+      };
+
+      const rec = new MediaRecorder(stream, { 
+        mimeType,
+        videoBitsPerSecond: 1_200_000, // Slightly higher for remote clarity
+        audioBitsPerSecond: 128_000
+      });
+      recorderRef.current = rec;
+
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          if (isWsReady && ws.readyState === WebSocket.OPEN) {
+            ws.send(e.data);
+          } else {
+            // Buffer the critical video header and early chunks until connection is established
+            chunksQueue.push(e.data);
+          }
+        }
+      };
+
+      rec.start(200); // 200ms chunks are more stable for tunneled streaming
+      setPhase("recording");
+      setSecondsLeft(ANSWER_SECONDS);
+
+      if (timerRef.current) clearInterval(timerRef.current);
+      timerRef.current = setInterval(() => {
+        setSecondsLeft((s) => {
+          if (s <= 1) {
+            if (timerRef.current) clearInterval(timerRef.current);
+            timerRef.current = null;
+            void stopRecordingAndUpload();
+            return 0;
+          }
+          return s - 1;
+        });
+      }, 1000);
+    } catch (e) {
+      setError("Connection Error: Could not establish live interview feed.");
+    }
+  }, [q, stopRecordingAndUpload, interviewId]);
+
+  const startReadingPhase = useCallback(() => {
+    if (!q) return;
+    setPhase("reading");
+    setSecondsLeft(THINK_SECONDS);
 
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => {
@@ -182,20 +257,20 @@ export function InterviewSessionPage() {
         if (s <= 1) {
           if (timerRef.current) clearInterval(timerRef.current);
           timerRef.current = null;
-          void stopRecordingAndUpload();
+          startQuestionRecording();
           return 0;
         }
         return s - 1;
       });
     }, 1000);
-  }, [q, stopRecordingAndUpload]);
+  }, [q, startQuestionRecording]);
 
   useEffect(() => {
     if (!streamReady || mediaError || !q || phase !== "arm") return;
     const token = ++armTokenRef.current;
     const t = window.setTimeout(() => {
       if (token !== armTokenRef.current) return;
-      startQuestionRecording();
+      startReadingPhase();
     }, 500);
     return () => {
       armTokenRef.current += 1;
@@ -225,7 +300,7 @@ export function InterviewSessionPage() {
         }
         if (st === "failed") {
           setGenFailed(true);
-          setGenMessage("We couldn’t finish scoring this interview.");
+          setGenMessage("Analysis Unsuccessful. Please try refreshing.");
           return;
         }
         if (st === "active" && !kickoffSent.current) {
@@ -237,10 +312,10 @@ export function InterviewSessionPage() {
           }
         }
         if (st === "processing") {
-          setGenMessage("Analyzing your answers and video — almost there…");
+          setGenMessage("Evaluating responses and grading technical accuracy...");
         }
       } catch {
-        if (!cancelled) setGenMessage("Still working — retrying…");
+        if (!cancelled) setGenMessage("Network delay: Re-fetching metrics...");
       }
     };
 
@@ -254,51 +329,51 @@ export function InterviewSessionPage() {
 
   if (phase === "generating") {
     return (
-      <div className="mx-auto flex min-h-[70vh] max-w-lg flex-col items-center justify-center px-4 animate-slide-up">
-        <div className="relative mb-10 h-36 w-36">
-          <div
-            className="absolute inset-0 rounded-full bg-gradient-to-tr from-primary/40 via-accent/30 to-primary/20 blur-xl animate-pulseSoft"
-            aria-hidden
-          />
-          <div
-            className="absolute left-2 top-3 h-14 w-14 rounded-full bg-primary/50 blur-md animate-orb-drift"
-            aria-hidden
-          />
-          <div
-            className="absolute bottom-4 right-0 h-12 w-12 rounded-full bg-accent/45 blur-md animate-orb-drift [animation-delay:-2s]"
-            aria-hidden
-          />
-          <div className="relative flex h-full w-full items-center justify-center rounded-full border border-primary/20 bg-card/80 shadow-lg backdrop-blur-sm">
-            <Sparkles className="h-14 w-14 text-primary animate-pulseSoft" />
-          </div>
+      <div className="mx-auto flex min-h-[80vh] max-w-2xl flex-col items-center justify-center px-4 animate-slide-up">
+        <div className="relative mb-12 h-40 w-40 flex items-center justify-center">
+           <div className="absolute inset-x-0 top-0 h-1 bg-primary/40 rounded-full animate-scan z-20"></div>
+           <div className="absolute inset-0 rounded-full bg-primary/20 blur-3xl animate-pulse"></div>
+           <div className="relative z-10 flex h-full w-full items-center justify-center rounded-[2.5rem] border-2 border-primary/20 bg-card shadow-2xl overflow-hidden">
+              <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent"></div>
+              <ClipboardList className="h-16 w-16 text-primary animate-float" />
+           </div>
+           
+           {/* High-tech orbits */}
+           <div className="absolute inset-[-20px] border border-primary/10 rounded-full animate-spin-slow"></div>
+           <div className="absolute inset-[-40px] border border-primary/5 rounded-full animate-reverse-spin-slow"></div>
         </div>
-        <Card className="w-full border-border/80 text-center overflow-hidden">
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted" aria-hidden>
-            <div className="h-full w-2/5 rounded-full bg-gradient-to-r from-primary/40 via-primary to-primary/40 animate-generating-bar" />
+
+        <Card className="w-full border-border text-center overflow-hidden bg-white dark:bg-card shadow-[0_32px_64px_-16px_rgba(0,0,0,0.1)] rounded-[3rem]">
+          <div className="h-2 w-full overflow-hidden bg-muted" aria-hidden>
+            <div className="h-full w-full bg-primary animate-generating-bar shadow-[0_0_12px_rgba(var(--primary),0.5)]" />
           </div>
-          <CardHeader className="space-y-2">
-            <CardTitle className="font-display text-xl">Please wait</CardTitle>
-            <p className="text-sm text-muted-foreground leading-relaxed">{genMessage}</p>
+          <CardHeader className="space-y-4 py-12 px-10">
+            <CardTitle className="font-display text-3xl font-bold tracking-tight text-foreground uppercase tracking-widest">Performance Analysis</CardTitle>
+            <p className="text-base text-muted-foreground font-medium px-8 leading-relaxed max-w-md mx-auto">{genMessage}</p>
           </CardHeader>
-          <CardContent className="flex flex-col items-center gap-6 pb-10">
+          <CardContent className="flex flex-col items-center gap-8 pb-14">
             {!genFailed && (
-              <Loader2 className="h-11 w-11 animate-spin text-primary" aria-hidden />
+              <div className="flex items-center gap-3 px-6 py-2.5 rounded-full bg-primary/5 border border-primary/10">
+                 <div className="flex gap-1">
+                    <div className="w-1 h-1 rounded-full bg-primary animate-bounce"></div>
+                    <div className="w-1 h-1 rounded-full bg-primary animate-bounce [animation-delay:0.2s]"></div>
+                    <div className="w-1 h-1 rounded-full bg-primary animate-bounce [animation-delay:0.4s]"></div>
+                 </div>
+                 <span className="text-[10px] font-bold text-primary uppercase tracking-[0.2em]">Engaging Mentor Insight</span>
+              </div>
             )}
             {genFailed && (
-              <div className="flex flex-col gap-2 w-full max-w-xs">
-                <Button
-                  type="button"
-                  onClick={() => {
+              <div className="flex flex-col gap-4 w-full max-w-sm">
+                <Button className="rounded-2xl h-14 font-bold uppercase tracking-widest shadow-lg shadow-primary/20" onClick={() => {
                     setGenFailed(false);
                     kickoffSent.current = false;
-                    setGenMessage("Retrying analysis…");
+                    setGenMessage("Retrying Evaluation Phase...");
                     void api.post(`/interview/${interviewId}/process`).catch(() => {});
-                  }}
-                >
-                  Retry analysis
+                }}>
+                  Retry Assessment
                 </Button>
-                <Button variant="outline" type="button" onClick={() => navigate("/")}>
-                  Back to dashboard
+                <Button variant="ghost" className="rounded-2xl h-14 font-bold uppercase tracking-widest text-muted-foreground" onClick={() => navigate("/")}>
+                  Back to Dashboard
                 </Button>
               </div>
             )}
@@ -310,13 +385,13 @@ export function InterviewSessionPage() {
 
   if (phase === "results" && interviewId) {
     return (
-      <div className="mx-auto w-full max-w-4xl">
+      <div className="mx-auto w-full max-w-[1700px]">
         <InterviewResultsView
           interviewId={interviewId}
           status={resultsStatus || "completed"}
           result={resultSummary}
           rows={resultRows}
-          title="Interview complete"
+          title="Performance Feedback Report"
           onBeforeDashboard={() => {
             clearSession();
           }}
@@ -325,81 +400,210 @@ export function InterviewSessionPage() {
     );
   }
 
-  if (!q) {
-    return null;
-  }
+  if (!q) return null;
 
   const progressPct = ((index + (phase === "uploading" ? 0.5 : 0)) / questions.length) * 100;
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6 animate-slide-up">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="text-sm text-muted-foreground">
-            Question {index + 1} of {questions.length}
-          </p>
-          <h1 className="font-display text-xl font-semibold">Live interview</h1>
+    <div className="w-full animate-slide-up pb-10 px-0 mt-4 px-8">
+      {/* Professional Interview Header */}
+      <div className="flex flex-col md:flex-row items-center justify-between gap-6 mb-12">
+        <div className="space-y-4 text-center md:text-left">
+          <Badge variant="outline" className="px-4 py-1 rounded-full border-primary/20 bg-primary/5 text-primary text-[10px] font-bold uppercase tracking-[0.2em] shadow-sm">
+             Session Live & Synchronized
+          </Badge>
+          <h1 className="font-display text-5xl font-bold tracking-tighter text-foreground">
+            Question {index + 1} <span className="text-muted-foreground/20 font-light mx-2">/</span> {questions.length}
+          </h1>
         </div>
-        {phase === "recording" && (
-          <Badge variant="outline" className="gap-1.5 border-red-300 text-red-700 dark:text-red-300">
-            <Circle className="h-2 w-2 fill-red-500 text-red-500 animate-pulseSoft" />
-            Recording
-          </Badge>
-        )}
-        {phase === "uploading" && (
-          <Badge className="gap-1">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Uploading…
-          </Badge>
-        )}
+        
+        <div className="flex items-center gap-8 bg-card border border-border px-8 py-5 rounded-[2rem] shadow-sm relative overflow-hidden group">
+            <div className="absolute inset-0 bg-gradient-to-br from-primary/[0.02] to-transparent"></div>
+            <div className="flex flex-col items-start pr-10 border-r border-border relative z-10">
+                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1.5 opacity-60">Status</span>
+                <span className="flex items-center gap-2.5 text-[10px] font-bold text-emerald-600 uppercase tracking-[0.1em]">
+                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse"></div>
+                    Optimized Feed
+                </span>
+            </div>
+            <div className="flex flex-col items-start relative z-10">
+               <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1.5 opacity-60">Session ID</span>
+               <span className="text-[10px] font-bold text-foreground uppercase tracking-widest font-mono opacity-80">
+                  {interviewId?.substring(0, 8) || "SESSION"}
+               </span>
+            </div>
+        </div>
       </div>
 
-      <Progress value={progressPct} />
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
+        {/* Widescreen Video Intelligence Feed */}
+        <div className="lg:col-span-8 space-y-10">
+          <div className="relative group">
+            {/* Visual glow backdrop */}
+            <div className="absolute -inset-1 bg-primary/10 rounded-[3rem] blur-2xl opacity-20 transition-opacity group-hover:opacity-30"></div>
+            
+            <Card className="relative overflow-hidden border-border bg-black rounded-[3rem] shadow-2xl aspect-video border-[4px] border-black transition-all">
+                <video 
+                  ref={videoRef} 
+                  className="h-full w-full object-cover -scale-x-100 transition-all duration-1000" 
+                  playsInline 
+                  muted 
+                  autoPlay 
+                  style={{ opacity: phase === "uploading" ? 0.4 : 1, filter: phase === "uploading" ? "blur(4px)" : "none" }}
+                />
 
-      <div className="grid gap-6 md:grid-cols-5">
-        <Card className="md:col-span-2 overflow-hidden border-border/80">
-          <div className="aspect-video bg-black">
-            <video ref={videoRef} className="h-full w-full object-cover" playsInline muted autoPlay />
+                {/* Corner Accents (The 'Wow' Factor) */}
+                <div className="absolute top-8 left-8 w-12 h-12 border-l-2 border-t-2 border-white/20 rounded-tl-xl pointer-events-none"></div>
+                <div className="absolute top-8 right-8 w-12 h-12 border-r-2 border-t-2 border-white/20 rounded-tr-xl pointer-events-none"></div>
+                <div className="absolute bottom-8 left-8 w-12 h-12 border-l-2 border-b-2 border-white/20 rounded-bl-xl pointer-events-none"></div>
+                <div className="absolute bottom-8 right-8 w-12 h-12 border-r-2 border-b-2 border-white/20 rounded-br-xl pointer-events-none"></div>
+                
+                {/* HUD Overlays */}
+                <div className="absolute top-8 left-8 z-40 flex flex-col gap-3">
+                  {phase === "recording" && (
+                    <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-red-600 shadow-[0_8px_24px_-4px_rgba(220,38,38,0.4)] animate-in slide-in-from-left-6 duration-700">
+                      <div className="w-2 h-2 rounded-full bg-white animate-pulse"></div>
+                      <span className="text-[10px] font-black text-white uppercase tracking-[0.2em] leading-none">REC. LIVE</span>
+                    </div>
+                  )}
+                  {phase === "reading" && (
+                    <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-primary shadow-lg animate-in slide-in-from-left-6 duration-700">
+                      <Clock className="h-4 w-4 text-white" />
+                      <span className="text-[10px] font-black text-white uppercase tracking-[0.2em] leading-none">EVALUATING CONTEXT</span>
+                    </div>
+                  )}
+                  {phase === "uploading" && (
+                    <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-white/10 backdrop-blur-md border border-white/20">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
+                      <span className="text-[10px] font-black text-white uppercase tracking-[0.2em] leading-none">SYNCING</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Processing Overlay (The 'Perfect' Opacity) */}
+                {phase === "uploading" && (
+                  <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-700">
+                    <div className="relative mb-6">
+                        <div className="absolute inset-0 bg-primary/40 blur-2xl animate-pulse"></div>
+                        <Loader2 className="relative z-10 h-14 w-14 animate-spin text-white opacity-80" />
+                    </div>
+                    <h3 className="text-white font-display text-3xl font-bold tracking-tight mb-3 drop-shadow-lg">Syncing Statistics</h3>
+                    <p className="text-white/60 text-[10px] font-bold uppercase tracking-[0.3em] text-center px-12 max-w-sm leading-relaxed">
+                        Anchoring your response to the career blue-print for analytical scoring.
+                    </p>
+                  </div>
+                )}
+
+                {/* Scanner Line Effect during Recording */}
+                {phase === "recording" && (
+                     <div className="absolute inset-x-0 h-[2px] bg-primary/20 shadow-[0_0_15px_rgba(var(--primary),0.5)] z-20 top-0 animate-scan pointer-events-none opacity-40"></div>
+                )}
+            </Card>
           </div>
-        </Card>
-        <Card className="md:col-span-3 border-border/80">
-          <CardHeader>
-            <CardTitle className="text-lg leading-snug">{q.text}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="flex items-end justify-between gap-4">
-              <div>
-                <p className="text-sm text-muted-foreground mb-1">Time remaining</p>
-                <p className="font-display text-5xl font-bold tabular-nums tracking-tight">
-                  {secondsLeft}
-                  <span className="text-2xl text-muted-foreground font-medium ml-1">s</span>
-                </p>
-              </div>
-              <div className="h-16 w-16 rounded-full border-4 border-primary/30 flex items-center justify-center">
-                <span className="text-sm font-medium text-primary">
-                  {Math.round(((ANSWER_SECONDS - secondsLeft) / ANSWER_SECONDS) * 100)}%
-                </span>
-              </div>
+          
+          {/* Continuity Progress */}
+          <div className="px-6 space-y-4">
+            <div className="flex justify-between items-end text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground/40">
+              <span className="flex items-center gap-2">
+                <Activity className="h-3 w-3" />
+                Session Progress
+              </span>
+              <span className="text-primary font-black tracking-tighter">{Math.round(progressPct)}%</span>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Recording starts automatically once your camera is ready. At 0s the clip uploads and
-              the next question appears.
-            </p>
-            {error && (
-              <p className="text-sm text-red-600 dark:text-red-400" role="alert">
-                {error}
-              </p>
-            )}
-            {mediaError && (
-              <div className="space-y-2">
-                <p className="text-sm text-red-600 dark:text-red-400">{mediaError}</p>
-                <Button variant="outline" onClick={() => navigate("/")}>
-                  Back to dashboard
-                </Button>
+            <div className="w-full h-2.5 bg-muted rounded-full overflow-hidden p-0.5 border border-border shadow-inner">
+              <div 
+                className="h-full bg-primary rounded-full transition-all duration-1000 ease-in-out shadow-[0_0_10px_rgba(var(--primary),0.3)]" 
+                style={{ width: `${progressPct}%` }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Right Side: Analytical Context Card */}
+        <div className="lg:col-span-4 h-full">
+          <Card className="border-border bg-card shadow-2xl rounded-[3rem] overflow-hidden flex flex-col h-full border-[1.5px] transition-all hover:shadow-primary/5">
+            <CardHeader className="p-10 pb-8 border-b border-border bg-muted/20 relative">
+              <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
+                 <BrainCircuit className="w-24 h-24" />
               </div>
-            )}
-          </CardContent>
-        </Card>
+              <div className="space-y-8 flex flex-col relative z-10">
+                <div className="flex justify-between items-start gap-4">
+                   <div className="space-y-4">
+                      <div className="flex items-center gap-3 text-primary/60">
+                          <ClipboardList className="h-4 w-4" />
+                          <span className="text-[10px] font-black uppercase tracking-[0.2em]">Context Query</span>
+                      </div>
+                      <CardTitle className="text-[1.75rem] font-bold tracking-tight text-foreground leading-[1.3] pr-2">
+                        {q.text}
+                      </CardTitle>
+                   </div>
+
+                   {/* Timer Feed (High-end) */}
+                   <div className={`flex flex-col items-center justify-center w-20 h-20 rounded-[1.5rem] border-2 transition-all duration-500 shadow-lg shrink-0 ${phase === "reading" ? "border-primary/30 bg-primary/5 text-primary scale-90" : "border-primary/50 bg-primary/10 text-primary scale-100 shadow-primary/20"} relative overflow-hidden`}>
+                      <span className="relative z-10 text-3xl font-display font-black tabular-nums leading-none tracking-tighter">
+                         {secondsLeft}s
+                      </span>
+                      <div className="absolute bottom-0 left-0 h-1.5 bg-primary/40 transition-all duration-1000" style={{ width: `${(secondsLeft / (phase === "reading" ? THINK_SECONDS : ANSWER_SECONDS)) * 100}%` }}></div>
+                   </div>
+                </div>
+              </div>
+            </CardHeader>
+
+            <CardContent className="flex-1 p-10 space-y-10 bg-white dark:bg-card">
+              <div className="space-y-10">
+                {phase === "reading" ? (
+                  <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-700">
+                    <p className="text-lg text-muted-foreground font-medium leading-relaxed">
+                      Analyze the question carefully. Focus on articulating your technical depth and leadership experience.
+                    </p>
+                    <Button 
+                      className="w-full h-16 rounded-2xl text-[11px] font-black gap-4 shadow-xl shadow-primary/20 group transition-all bg-primary hover:bg-primary/90 text-primary-foreground uppercase tracking-[0.2em]" 
+                      onClick={startQuestionRecording}
+                    >
+                      <Zap className="h-5 w-5 fill-current" />
+                      Skip reading question
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-10 animate-in fade-in duration-1000">
+                    <div className="p-6 rounded-2xl bg-muted/40 border border-border flex items-center justify-between shadow-inner">
+                       <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest ml-1 opacity-70">Capture Feed Active</span>
+                       <div className="flex gap-2">
+                           <div className="w-2 h-2 rounded-full bg-primary/30 animate-pulse"></div>
+                           <div className="w-2 h-2 rounded-full bg-primary/50 animate-pulse [animation-delay:0.3s]"></div>
+                           <div className="w-2 h-2 rounded-full bg-primary animate-pulse [animation-delay:0.6s]"></div>
+                       </div>
+                    </div>
+                    
+                    <div className="space-y-6">
+                        <div className="flex items-center gap-3 text-emerald-600/60">
+                            <ShieldCheck className="h-5 w-5" />
+                            <span className="text-[11px] font-black uppercase tracking-[0.2em]">Quality Assurance Sync</span>
+                        </div>
+                        <p className="text-base font-medium text-muted-foreground leading-relaxed">
+                            Maintain consistent volume and professional posture. Your behavioral signals are being indexed.
+                        </p>
+                    </div>
+                  </div>
+                )}
+
+                {error && (
+                  <div className="p-5 rounded-2xl border border-destructive/30 bg-destructive/5 text-center animate-shake">
+                    <p className="text-[10px] font-bold text-destructive uppercase tracking-widest leading-relaxed">{error}</p>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+            
+            <div className="p-8 bg-muted/10 border-t border-border flex items-center justify-between">
+                <div className="flex items-center gap-3 text-muted-foreground/20">
+                    <Scan className="h-4 w-4" />
+                    <span className="text-[10px] font-black uppercase tracking-[0.3em]">EVOLVE PLATFORM v5.0</span>
+                </div>
+                <div className="w-2 h-2 rounded-full bg-primary animate-ping"></div>
+            </div>
+          </Card>
+        </div>
       </div>
     </div>
   );

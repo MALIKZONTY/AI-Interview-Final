@@ -1,3 +1,13 @@
+---
+title: Evolve AI Interview
+emoji: 🚀
+colorFrom: sky
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: true
+---
+
 # 🚀 AI-Powered Role-Focused Interview System
 
 An intelligent mock interview platform that generates role-based questions and evaluates candidates using AI techniques such as Natural Language Processing (NLP), Speech Analysis, and Computer Vision.

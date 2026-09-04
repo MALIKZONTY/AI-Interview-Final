@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Local speech-to-text using faster-whisper (pretrained Whisper weights, runs on CPU/GPU).
 No OpenAI or other paid APIs. FFmpeg converts tricky WebM clips to WAV when needed.
@@ -12,17 +13,41 @@ import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, File, UploadFile
+from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Client used for cloud-based STT (Groq Whisper)
+client = AsyncOpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    base_url=os.getenv("OPENAI_BASE_URL", "https://api.groq.com/openai/v1"),
+)
+
 
 def _ffmpeg_to_wav(src: Path) -> Path | None:
     dst = src.with_suffix(".wav")
+    
+    # Try to find ffmpeg in common macOS / Linux paths if not in PATH
+    ffmpeg_cmd = "ffmpeg"
+    common_paths = [
+        "/opt/homebrew/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/usr/bin/ffmpeg",
+    ]
+    
+    # Check if 'ffmpeg' is in PATH first
+    import shutil
+    if not shutil.which("ffmpeg"):
+        for p in common_paths:
+            if os.path.exists(p):
+                ffmpeg_cmd = p
+                break
+    
     try:
         subprocess.run(
             [
-                "ffmpeg",
+                ffmpeg_cmd,
                 "-y",
                 "-i",
                 str(src),
@@ -41,7 +66,7 @@ def _ffmpeg_to_wav(src: Path) -> Path | None:
         )
         return dst
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
-        logger.warning("ffmpeg wav extract failed: %s", e)
+        logger.warning("ffmpeg wav extract failed (cmd=%s): %s", ffmpeg_cmd, e)
         return None
 
 
@@ -67,7 +92,7 @@ def _transcribe_faster_whisper(path: Path) -> str | None:
             str(path),
             beam_size=5,
             vad_filter=True,
-            language=os.getenv("WHISPER_LANGUAGE") or None,
+            language="en",
         )
         text = " ".join(s.text.strip() for s in segments).strip()
         return text or None
@@ -85,7 +110,7 @@ def _transcribe_openai_whisper_pkg(path: Path) -> str | None:
     try:
         model_name = os.getenv("WHISPER_MODEL", "base")
         model = whisper.load_model(model_name)
-        result = model.transcribe(str(path))
+        result = model.transcribe(str(path), language="en")
         return (result.get("text") or "").strip() or None
     except Exception as e:
         logger.warning("openai-whisper failed: %s", e)
@@ -119,6 +144,22 @@ def _transcribe_file(path: Path) -> str:
     return ""
 
 
+async def _transcribe_cloud(path: Path) -> str | None:
+    """Uses Groq's Whisper API to transcribe the audio file."""
+    try:
+        with open(path, "rb") as audio_file:
+            transcription = await client.audio.transcriptions.create(
+                model="whisper-large-v3",
+                file=audio_file,
+                response_format="text",
+                language="en"
+            )
+            return transcription
+    except Exception as e:
+        logger.warning("Cloud transcription failed: %s", e)
+        return None
+
+
 @router.post("/speech-to-text")
 async def speech_to_text(file: UploadFile = File(...)):
     suffix = Path(file.filename or "clip").suffix or ".webm"
@@ -127,8 +168,15 @@ async def speech_to_text(file: UploadFile = File(...)):
         tmp.write(data)
         tmp_path = Path(tmp.name)
     try:
+        # 1. Try local transcription first
         text = _transcribe_file(tmp_path)
-        return {"text": text}
+        
+        # 2. If local fails (likely due to missing ffmpeg/faster-whisper), fall back to cloud
+        if not text:
+            logger.info("Local transcription empty/failed; trying cloud...")
+            text = await _transcribe_cloud(tmp_path)
+            
+        return {"text": text or ""}
     finally:
         try:
             tmp_path.unlink(missing_ok=True)
