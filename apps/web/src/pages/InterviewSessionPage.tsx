@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Loader2, BrainCircuit, ShieldCheck, Clock, Zap, ClipboardList, Scan, Activity, Mic } from "lucide-react";
+import { Loader2, BrainCircuit, ShieldCheck, Clock, Zap, ClipboardList, Scan, Activity, Mic, Volume2, UserRound, CornerDownRight } from "lucide-react";
 import { api } from "@/lib/api";
 import {
   InterviewResultsView,
@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useInterviewStore } from "@/store/interviewStore";
+import { speak, cancelSpeech, isSpeechSupported } from "@/lib/speech";
 
 const ANSWER_SECONDS = 30;
 const THINK_SECONDS = 10;
@@ -31,14 +32,19 @@ function pickMimeType(): string {
 }
 
 /**
- * Timed interview: one audio clip per question, auto-stops at 30s, uploaded to the API.
- * Nothing is captured from the camera — scoring is transcript + vocal delivery only.
+ * Timed interview. The interviewer reads each question aloud, the candidate answers
+ * into the microphone, and the server may replace the next planned question with a
+ * follow-up probing what was just said.
+ *
+ * Per question: ask (TTS) -> think -> record 30s -> upload. Nothing is captured from
+ * the camera; scoring is transcript + vocal delivery only.
  */
 export function InterviewSessionPage() {
   const navigate = useNavigate();
   const interviewId = useInterviewStore((s) => s.interviewId);
   const questions = useInterviewStore((s) => s.questions);
   const clearSession = useInterviewStore((s) => s.clearSession);
+  const replaceQuestion = useInterviewStore((s) => s.replaceQuestion);
 
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -47,12 +53,11 @@ export function InterviewSessionPage() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const [levels, setLevels] = useState<number[]>(() => new Array(28).fill(0));
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const armTokenRef = useRef(0);
 
   const [index, setIndex] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(ANSWER_SECONDS);
   const [phase, setPhase] = useState<
-    "arm" | "reading" | "recording" | "uploading" | "generating" | "results"
+    "arm" | "asking" | "reading" | "recording" | "uploading" | "generating" | "results"
   >("arm");
   const [streamReady, setStreamReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -142,7 +147,7 @@ export function InterviewSessionPage() {
     }
 
     setPhase("uploading");
-    setResultsStatus("Uploading your answer...");
+    setResultsStatus("Listening back and preparing the next question...");
 
     // Wait for the recorder to flush its final chunk before assembling the blob.
     const blob = await new Promise<Blob>((resolve) => {
@@ -163,9 +168,18 @@ export function InterviewSessionPage() {
       form.append("interviewId", interviewId ?? "");
       form.append("questionId", q?.id ?? "");
       form.append("audio", blob, blob.type.includes("mp4") ? "answer.m4a" : "answer.webm");
-      await api.post("/interview/submit", form, {
+      const { data } = await api.post<{
+        ok: boolean;
+        done: boolean;
+        nextQuestion: { id: string; orderIndex: number; text: string; isFollowUp: boolean } | null;
+      }>("/interview/submit", form, {
         headers: { "Content-Type": "multipart/form-data" },
       });
+
+      // The server may have rewritten the next question into a follow-up on this answer.
+      if (data?.nextQuestion) {
+        replaceQuestion(data.nextQuestion);
+      }
     } catch (err) {
       console.error("Answer upload failed:", err);
       setError("Your answer could not be uploaded. Connection interrupted.");
@@ -186,7 +200,7 @@ export function InterviewSessionPage() {
     setSecondsLeft(THINK_SECONDS);
     setPhase("arm");
     setResultsStatus("");
-  }, [cleanupStream, interviewId, isLast, q?.id]);
+  }, [cleanupStream, interviewId, isLast, q?.id, replaceQuestion]);
 
   const startQuestionRecording = useCallback(() => {
     const stream = streamRef.current;
@@ -247,18 +261,45 @@ export function InterviewSessionPage() {
     }, 1000);
   }, [q, startQuestionRecording]);
 
+  // Kept in a ref so the ask sequence below can start the timer without taking a
+  // dependency on it — re-running that effect mid-question would cut the voice off.
+  const startReadingRef = useRef(startReadingPhase);
   useEffect(() => {
-    if (!streamReady || mediaError || !q || phase !== "arm") return;
-    const token = ++armTokenRef.current;
-    const t = window.setTimeout(() => {
-      if (token !== armTokenRef.current) return;
-      startReadingPhase();
-    }, 500);
-    return () => {
-      armTokenRef.current += 1;
-      clearTimeout(t);
+    startReadingRef.current = startReadingPhase;
+  });
+
+  /**
+   * Per question: read it aloud, then hand over to the thinking timer. Keyed on the
+   * question rather than the phase, so setPhase inside does not restart it.
+   */
+  useEffect(() => {
+    if (!streamReady || mediaError || !q) return;
+
+    let cancelled = false;
+
+    const ask = async () => {
+      setPhase("asking");
+      // Small beat so the question is on screen before the voice starts.
+      await new Promise((resolve) => window.setTimeout(resolve, 350));
+      if (cancelled) return;
+      await speak(q.text);
+      if (cancelled) return;
+      startReadingRef.current();
     };
-  }, [streamReady, mediaError, index, phase, q, startQuestionRecording]);
+
+    void ask();
+
+    return () => {
+      cancelled = true;
+      cancelSpeech();
+    };
+  }, [index, streamReady, mediaError, q?.id]);
+
+  /** Cuts the interviewer off and moves straight to thinking time. */
+  const skipQuestionAudio = useCallback(() => {
+    cancelSpeech();
+    startReadingRef.current();
+  }, []);
 
   useEffect(() => {
     const analyser = analyserRef.current;
@@ -473,46 +514,82 @@ export function InterviewSessionPage() {
             
             <Card className="relative overflow-hidden border-border bg-black rounded-[3rem] shadow-2xl aspect-video border-[4px] border-black transition-all">
                 <div
-                  className="flex h-full w-full flex-col items-center justify-center gap-10 bg-gradient-to-b from-neutral-900 to-black transition-all duration-1000"
+                  className="flex h-full w-full flex-col items-center justify-center gap-9 bg-gradient-to-b from-neutral-900 to-black transition-all duration-1000"
                   style={{ opacity: phase === "uploading" ? 0.4 : 1, filter: phase === "uploading" ? "blur(4px)" : "none" }}
                 >
-                  {/* Mic orb — pulses with the loudest current band */}
+                  {/* Whoever currently holds the floor: the interviewer, or the candidate's mic */}
                   <div className="relative flex items-center justify-center">
-                    <div
-                      className="absolute rounded-full bg-primary/30 blur-2xl transition-transform duration-100"
-                      style={{
-                        width: 150,
-                        height: 150,
-                        transform: `scale(${1 + Math.max(...levels, 0) * 0.85})`,
-                        opacity: phase === "recording" ? 0.85 : 0.3,
-                      }}
-                    />
-                    <div className="relative z-10 flex h-28 w-28 items-center justify-center rounded-full border border-white/15 bg-white/5 backdrop-blur-sm">
-                      <Mic
-                        className={`h-11 w-11 ${phase === "recording" ? "text-white" : "text-white/40"}`}
+                    {phase === "asking" && (
+                      <>
+                        <div className="absolute h-44 w-44 rounded-full border border-primary/25 animate-ping [animation-duration:2s]" />
+                        <div className="absolute h-36 w-36 rounded-full border border-primary/40 animate-ping [animation-duration:2s] [animation-delay:0.4s]" />
+                      </>
+                    )}
+                    {phase === "recording" && (
+                      <div
+                        className="absolute rounded-full bg-primary/30 blur-2xl transition-transform duration-100"
+                        style={{
+                          width: 150,
+                          height: 150,
+                          transform: `scale(${1 + Math.max(...levels, 0) * 0.85})`,
+                        }}
                       />
+                    )}
+
+                    <div
+                      className={`relative z-10 flex h-28 w-28 items-center justify-center rounded-full border transition-colors duration-500 ${
+                        phase === "asking"
+                          ? "border-primary/50 bg-primary/15"
+                          : "border-white/15 bg-white/5 backdrop-blur-sm"
+                      }`}
+                    >
+                      {phase === "asking" ? (
+                        <UserRound className="h-12 w-12 text-primary" />
+                      ) : (
+                        <Mic className={`h-11 w-11 ${phase === "recording" ? "text-white" : "text-white/40"}`} />
+                      )}
                     </div>
+
+                    {phase === "asking" && (
+                      <div className="absolute -bottom-1 -right-1 z-20 flex h-9 w-9 items-center justify-center rounded-full border-2 border-black bg-primary">
+                        <Volume2 className="h-4 w-4 text-white" />
+                      </div>
+                    )}
                   </div>
 
-                  {/* Live level bars */}
+                  {/* Bars: real mic levels while recording, a speaking cadence while asking */}
                   <div className="flex h-24 items-end gap-1.5" aria-hidden>
                     {levels.map((v, i) => (
                       <div
                         key={i}
-                        className={`w-2 rounded-full transition-[height] duration-75 ${
-                          phase === "recording" ? "bg-primary" : "bg-white/15"
+                        className={`w-2 rounded-full ${
+                          phase === "recording"
+                            ? "bg-primary transition-[height] duration-75"
+                            : phase === "asking"
+                              ? "bg-primary/60 animate-pulse"
+                              : "bg-white/15"
                         }`}
-                        style={{ height: `${Math.max(4, v * 96)}px` }}
+                        style={
+                          phase === "asking"
+                            ? {
+                                height: `${18 + ((i * 37) % 46)}px`,
+                                animationDelay: `${(i % 7) * 0.11}s`,
+                                animationDuration: "0.9s",
+                              }
+                            : { height: `${Math.max(4, v * 96)}px` }
+                        }
                       />
                     ))}
                   </div>
 
                   <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/35">
-                    {phase === "recording"
-                      ? "Listening to your answer"
-                      : phase === "reading"
-                        ? "Take a moment to think"
-                        : "Microphone ready"}
+                    {phase === "asking"
+                      ? "Your interviewer is speaking"
+                      : phase === "recording"
+                        ? "Listening to your answer"
+                        : phase === "reading"
+                          ? "Take a moment to think"
+                          : "Microphone ready"}
                   </p>
                 </div>
 
@@ -528,6 +605,12 @@ export function InterviewSessionPage() {
                     <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-red-600 shadow-[0_8px_24px_-4px_rgba(220,38,38,0.4)] animate-in slide-in-from-left-6 duration-700">
                       <div className="w-2 h-2 rounded-full bg-white animate-pulse"></div>
                       <span className="text-[10px] font-black text-white uppercase tracking-[0.2em] leading-none">REC. LIVE</span>
+                    </div>
+                  )}
+                  {phase === "asking" && (
+                    <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-primary shadow-lg animate-in slide-in-from-left-6 duration-700">
+                      <Volume2 className="h-4 w-4 text-white" />
+                      <span className="text-[10px] font-black text-white uppercase tracking-[0.2em] leading-none">ASKING</span>
                     </div>
                   )}
                   {phase === "reading" && (
@@ -594,8 +677,17 @@ export function InterviewSessionPage() {
                 <div className="flex justify-between items-start gap-4">
                    <div className="space-y-4">
                       <div className="flex items-center gap-3 text-primary/60">
-                          <ClipboardList className="h-4 w-4" />
-                          <span className="text-[10px] font-black uppercase tracking-[0.2em]">Context Query</span>
+                          {q.isFollowUp ? (
+                            <>
+                              <CornerDownRight className="h-4 w-4" />
+                              <span className="text-[10px] font-black uppercase tracking-[0.2em]">Follow-up on your last answer</span>
+                            </>
+                          ) : (
+                            <>
+                              <ClipboardList className="h-4 w-4" />
+                              <span className="text-[10px] font-black uppercase tracking-[0.2em]">Context Query</span>
+                            </>
+                          )}
                       </div>
                       <CardTitle className="text-[1.75rem] font-bold tracking-tight text-foreground leading-[1.3] pr-2">
                         {q.text}
@@ -604,10 +696,16 @@ export function InterviewSessionPage() {
 
                    {/* Timer Feed (High-end) */}
                    <div className={`flex flex-col items-center justify-center w-20 h-20 rounded-[1.5rem] border-2 transition-all duration-500 shadow-lg shrink-0 ${phase === "reading" ? "border-primary/30 bg-primary/5 text-primary scale-90" : "border-primary/50 bg-primary/10 text-primary scale-100 shadow-primary/20"} relative overflow-hidden`}>
-                      <span className="relative z-10 text-3xl font-display font-black tabular-nums leading-none tracking-tighter">
-                         {secondsLeft}s
-                      </span>
-                      <div className="absolute bottom-0 left-0 h-1.5 bg-primary/40 transition-all duration-1000" style={{ width: `${(secondsLeft / (phase === "reading" ? THINK_SECONDS : ANSWER_SECONDS)) * 100}%` }}></div>
+                      {phase === "asking" ? (
+                        <Volume2 className="relative z-10 h-8 w-8 animate-pulse" />
+                      ) : (
+                        <>
+                          <span className="relative z-10 text-3xl font-display font-black tabular-nums leading-none tracking-tighter">
+                             {secondsLeft}s
+                          </span>
+                          <div className="absolute bottom-0 left-0 h-1.5 bg-primary/40 transition-all duration-1000" style={{ width: `${(secondsLeft / (phase === "reading" ? THINK_SECONDS : ANSWER_SECONDS)) * 100}%` }}></div>
+                        </>
+                      )}
                    </div>
                 </div>
               </div>
@@ -615,7 +713,23 @@ export function InterviewSessionPage() {
 
             <CardContent className="flex-1 p-10 space-y-10 bg-white dark:bg-card">
               <div className="space-y-10">
-                {phase === "reading" ? (
+                {phase === "asking" ? (
+                  <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-700">
+                    <p className="text-lg text-muted-foreground font-medium leading-relaxed">
+                      {isSpeechSupported()
+                        ? "Your interviewer is reading the question aloud. Listen, or skip ahead when you are ready."
+                        : "Read the question above. Your browser does not support spoken questions."}
+                    </p>
+                    <Button
+                      variant="outline"
+                      className="w-full h-16 rounded-2xl text-[11px] font-black gap-4 uppercase tracking-[0.2em]"
+                      onClick={skipQuestionAudio}
+                    >
+                      <Zap className="h-5 w-5" />
+                      Skip to thinking time
+                    </Button>
+                  </div>
+                ) : phase === "reading" ? (
                   <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-700">
                     <p className="text-lg text-muted-foreground font-medium leading-relaxed">
                       Analyze the question carefully. Focus on articulating your technical depth and leadership experience.

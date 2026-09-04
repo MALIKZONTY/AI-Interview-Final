@@ -68,7 +68,7 @@ class SummaryResult(BaseModel):
 async def _llm_correctness(body: EvaluateBody, behavioral_context: str = "") -> LLMCorrectnessResult | None:
     """Uses Groq to judge the correctness of the candidate answer based on the rubric and behavioral context."""
     try:
-        model_name = os.getenv("OPENAI_MODEL", "llama-3.1-8b-instant")
+        model_name = os.getenv("OPENAI_MODEL", "openai/gpt-oss-20b")
         
         system_prompt = f"""
         You are an expert technical interviewer. 
@@ -327,7 +327,7 @@ async def evaluate_answer(body: EvaluateBody):
 async def generate_summary_feedback(body: SummaryBody):
     """Generates an overall interview performance summary."""
     try:
-        model_name = os.getenv("OPENAI_MODEL", "llama-3.1-8b-instant")
+        model_name = os.getenv("OPENAI_MODEL", "openai/gpt-oss-20b")
         
         history_text = "\n".join([f"Q: {h['question']}\nA: {h['answer']}" for h in body.interview_history])
         

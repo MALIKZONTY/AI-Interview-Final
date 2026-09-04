@@ -35,7 +35,7 @@ Extract the skills required, skills the candidate has, identify matches vs gaps,
 """
     try:
         completion = await client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "llama-3.3-70b-versatile"),
+            model=os.getenv("OPENAI_MODEL", "openai/gpt-oss-20b"),
             messages=[
                 {"role": "system", "content": "Return the requested JSON output strictly matching the following schema keys: {\"required_skills\": [], \"candidate_skills\": [], \"matched_skills\": [], \"missing_skills\": [], \"projects\": [], \"experience\": []}. Ensure it is pure JSON."},
                 {"role": "user", "content": prompt}

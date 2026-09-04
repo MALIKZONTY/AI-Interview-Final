@@ -7,6 +7,7 @@ import { storagePut, storageFetch } from "../lib/storage.js";
 import {
   aiGenerateQuestions,
   aiSpeechToText,
+  aiGenerateFollowUp,
   aiEvaluateAnswer,
   aiGenerateSummaryFeedback,
 } from "../lib/aiClient.js";
@@ -148,18 +149,85 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
 
     console.log(`[submit] Stored ${audio.length} bytes of audio for ${questionId} at ${storageUrl}`);
 
+    /**
+     * Transcribe now rather than at scoring time: the follow-up question is written
+     * from what the candidate just said. processInterview reuses this transcript and
+     * these metrics, so nothing is transcribed twice.
+     */
+    let transcript = "";
+    let voiceMeta: Record<string, unknown> = {};
+    try {
+      const stt = await aiSpeechToText(audio, mimeType);
+      transcript = stt.text;
+      voiceMeta = stt.voice_meta;
+    } catch (e) {
+      request.log.error({ err: e }, "[submit] transcription failed; processInterview will retry");
+    }
+
+    const answerMeta = { mime_type: mimeType, voice_meta: voiceMeta };
     await (prisma.response as any).upsert({
       where: { questionId: q.id },
-      create: { questionId: q.id, storageUrl, analysisMeta: { mime_type: mimeType } } as any,
+      create: {
+        questionId: q.id,
+        storageUrl,
+        transcript: transcript || null,
+        analysisMeta: answerMeta,
+      } as any,
       update: {
         storageUrl,
-        analysisMeta: { mime_type: mimeType },
-        transcript: null,
+        transcript: transcript || null,
+        analysisMeta: answerMeta,
         correctnessScore: null,
         confidenceScore: null,
         aiFeedback: null,
       } as any,
     });
+
+    /**
+     * Adaptive follow-up: when the answer opens a thread worth pulling, the next
+     * planned question is rewritten in place to probe it. Rewriting rather than
+     * inserting keeps numQuestions, ordering and the results maths untouched.
+     */
+    const nextIndex = q.orderIndex + 1;
+    let nextQuestion: { id: string; orderIndex: number; text: string; isFollowUp: boolean } | null =
+      null;
+
+    if (nextIndex < interview.numQuestions) {
+      const planned = interview.questions.find((x) => x.orderIndex === nextIndex);
+      if (planned) {
+        let text = planned.text;
+        let isFollowUp = false;
+
+        if (transcript.trim()) {
+          const decision = await aiGenerateFollowUp({
+            jdText: interview.jdText ?? "",
+            question: q.text,
+            candidateAnswer: transcript,
+            plannedNext: planned.text,
+            difficulty: interview.difficulty ?? "Medium",
+          });
+
+          if (decision.should_follow_up && decision.question) {
+            const fu = decision.question;
+            await prisma.question.update({
+              where: { id: planned.id },
+              data: {
+                text: fu.text,
+                expectedAnswer: fu.expected_answer,
+                acceptableVariants: (fu.acceptable_variants || []) as Prisma.InputJsonValue,
+                keywords: (fu.keywords || []) as Prisma.InputJsonValue,
+                evaluationRubric: (fu.evaluation_rubric || {}) as Prisma.InputJsonValue,
+              },
+            });
+            text = fu.text;
+            isFollowUp = true;
+            console.log(`[submit] Follow-up queued at #${nextIndex}: ${decision.reason ?? ""}`);
+          }
+        }
+
+        nextQuestion = { id: planned.id, orderIndex: nextIndex, text, isFollowUp };
+      }
+    }
 
     /**
      * When every question in this run has an answer, start scoring immediately.
@@ -185,7 +253,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    return reply.send({ ok: true });
+    return reply.send({ ok: true, nextQuestion, done: nextQuestion === null });
   });
 
   app.post("/:id/process", { preHandler: [app.authenticate] }, async (request, reply) => {

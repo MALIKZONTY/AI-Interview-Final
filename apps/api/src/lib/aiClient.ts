@@ -108,3 +108,39 @@ export async function aiGenerateSummaryFeedback(body: {
   );
   return data.summary;
 }
+
+export type FollowUpDecision = {
+  should_follow_up: boolean;
+  reason?: string;
+  question: GeneratedQuestion | null;
+};
+
+/**
+ * Asks whether to probe the answer just given instead of moving to the planned
+ * question. Never throws — the planned question is always a valid fallback.
+ */
+export async function aiGenerateFollowUp(body: {
+  jdText: string;
+  question: string;
+  candidateAnswer: string;
+  plannedNext: string;
+  difficulty?: string;
+}): Promise<FollowUpDecision> {
+  try {
+    const { data } = await axios.post<FollowUpDecision>(
+      `${base()}/generate-followup`,
+      {
+        jd_text: body.jdText,
+        question: body.question,
+        candidate_answer: body.candidateAnswer,
+        planned_next: body.plannedNext,
+        difficulty: body.difficulty ?? "Medium",
+      },
+      { timeout: 45_000 }
+    );
+    return data;
+  } catch (e) {
+    console.error("[ai] follow-up generation failed:", (e as Error).message);
+    return { should_follow_up: false, question: null };
+  }
+}
