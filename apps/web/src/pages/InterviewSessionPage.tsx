@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Loader2, BrainCircuit, ShieldCheck, Clock, Zap, ClipboardList, Scan, Activity, Video, Volume2, UserRound, CornerDownRight } from "lucide-react";
 import { api } from "@/lib/api";
@@ -11,7 +11,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useInterviewStore } from "@/store/interviewStore";
-import { speak, cancelSpeech, isSpeechSupported } from "@/lib/speech";
+import { speak, cancelSpeech } from "@/lib/speech";
+
+// three.js roughly doubles the bundle, so the avatar is only fetched once an
+// interview actually reaches the session screen.
+const InterviewerAvatar = lazy(() =>
+  import("@/components/InterviewerAvatar").then((m) => ({ default: m.InterviewerAvatar }))
+);
 
 const ANSWER_SECONDS = 30;
 const THINK_SECONDS = 10;
@@ -305,7 +311,7 @@ export function InterviewSessionPage() {
       // Small beat so the question is on screen before the voice starts.
       await new Promise((resolve) => window.setTimeout(resolve, 350));
       if (cancelled) return;
-      await speak(q.text);
+      await speak(q.id, q.text);
       if (cancelled) return;
       startReadingRef.current();
     };
@@ -553,12 +559,19 @@ export function InterviewSessionPage() {
                 {phase === "asking" && (
                   <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-8 bg-black/45 backdrop-blur-sm animate-in fade-in duration-500">
                     <div className="relative flex items-center justify-center">
-                      <div className="absolute h-44 w-44 rounded-full border border-primary/25 animate-ping [animation-duration:2s]" />
-                      <div className="absolute h-36 w-36 rounded-full border border-primary/40 animate-ping [animation-duration:2s] [animation-delay:0.4s]" />
-                      <div className="relative z-10 flex h-28 w-28 items-center justify-center rounded-full border border-primary/50 bg-primary/20 backdrop-blur-md">
-                        <UserRound className="h-12 w-12 text-primary" />
+                      <div className="absolute h-56 w-56 rounded-full border border-primary/20 animate-ping [animation-duration:2.4s]" />
+
+                      {/* 3D head; the static circle underneath shows through if it cannot render */}
+                      <div className="relative z-10 h-52 w-52 overflow-hidden rounded-full border border-primary/40 bg-primary/10 backdrop-blur-md">
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <UserRound className="h-16 w-16 text-primary/50" />
+                        </div>
+                        <Suspense fallback={null}>
+                          <InterviewerAvatar speaking={phase === "asking"} className="absolute inset-0 h-full w-full" />
+                        </Suspense>
                       </div>
-                      <div className="absolute -bottom-1 -right-1 z-20 flex h-9 w-9 items-center justify-center rounded-full border-2 border-black bg-primary">
+
+                      <div className="absolute bottom-2 right-2 z-20 flex h-9 w-9 items-center justify-center rounded-full border-2 border-black bg-primary">
                         <Volume2 className="h-4 w-4 text-white" />
                       </div>
                     </div>
@@ -711,9 +724,8 @@ export function InterviewSessionPage() {
                 {phase === "asking" ? (
                   <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-700">
                     <p className="text-lg text-muted-foreground font-medium leading-relaxed">
-                      {isSpeechSupported()
-                        ? "Your interviewer is reading the question aloud. Listen, or skip ahead when you are ready."
-                        : "Read the question above. Your browser does not support spoken questions."}
+                      Your interviewer is reading the question aloud. Listen, or skip ahead when
+                      you are ready.
                     </p>
                     <Button
                       variant="outline"

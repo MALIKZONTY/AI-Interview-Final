@@ -9,6 +9,7 @@ import {
   aiSpeechToText,
   aiAnalyzeVideo,
   aiGenerateFollowUp,
+  aiSpeak,
   aiEvaluateAnswer,
   aiGenerateSummaryFeedback,
 } from "../lib/aiClient.js";
@@ -310,6 +311,38 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
     void processInterview(id).catch((err) => console.error("processInterview", err));
 
     return reply.send({ ok: true, message: "Processing started" });
+  });
+
+  /**
+   * The interviewer reading a question aloud. Keyed on the question rather than
+   * free text so this cannot be used as an open text-to-speech service.
+   *
+   * 204 means no voice is available; the client falls back to browser synthesis.
+   */
+  app.post("/speak", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { questionId } = request.body as { questionId?: string };
+    if (!questionId) {
+      return reply.status(400).send({ error: "questionId required" });
+    }
+
+    const question = await prisma.question.findFirst({
+      where: { id: questionId, interview: { userId: request.userId } },
+      select: { text: true },
+    });
+    if (!question) {
+      return reply.status(404).send({ error: "Question not found" });
+    }
+
+    const audio = await aiSpeak(question.text);
+    if (!audio) {
+      return reply.status(204).send();
+    }
+
+    return reply
+      .header("Content-Type", "audio/wav")
+      .header("Content-Length", String(audio.length))
+      .header("Cache-Control", "private, max-age=3600")
+      .send(audio);
   });
 
   /**

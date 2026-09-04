@@ -9,6 +9,8 @@ mediapipe>=0.10.14
 scikit-learn==1.6.0
 # Local STT — pretrained Whisper (CTranslate2); downloads weights on first use
 faster-whisper>=1.0.3
+# Interviewer voice — local neural TTS; voice model downloads on first use
+piper-tts>=1.7.0
 # Local semantic similarity for scoring — pretrained MiniLM; pulls torch
 sentence-transformers>=3.3.0
 # Optional heavier STT (PyTorch): pip install openai-whisper

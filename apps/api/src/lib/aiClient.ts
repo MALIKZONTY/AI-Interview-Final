@@ -175,3 +175,23 @@ export async function aiAnalyzeVideo(videoBuffer: Buffer, mimeType: string): Pro
     return null;
   }
 }
+
+/**
+ * Renders question text to speech. Returns null when the service has no voice
+ * available, so the caller can fall back to the browser's own synthesiser.
+ */
+export async function aiSpeak(text: string): Promise<Buffer | null> {
+  try {
+    const res = await axios.post(`${base()}/speak`, { text }, {
+      responseType: "arraybuffer",
+      timeout: 60_000,
+      validateStatus: (s) => s === 200 || s === 204,
+    });
+    if (res.status === 204) return null;
+    const buf = Buffer.from(res.data as ArrayBuffer);
+    return buf.length > 0 ? buf : null;
+  } catch (e) {
+    console.error("[ai] speech synthesis failed:", (e as Error).message);
+    return null;
+  }
+}
