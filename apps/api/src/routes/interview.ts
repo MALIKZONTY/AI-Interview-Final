@@ -3,7 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import axios from "axios";
 import { prisma } from "../lib/prisma.js";
-import { storagePut, storageFetch } from "../lib/storage.js";
+import { storagePut, storageFetch, storageRemove } from "../lib/storage.js";
 import {
   aiGenerateQuestions,
   aiSpeechToText,
@@ -135,7 +135,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
 
     const interview = await prisma.interview.findFirst({
       where: { id: interviewId, userId: request.userId },
-      include: { questions: true },
+      include: { questions: { include: { responses: true } } },
     });
     if (!interview) {
       return reply.status(404).send({ error: "Interview not found" });
@@ -143,6 +143,18 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
     const q = interview.questions.find((x) => x.id === questionId);
     if (!q || q.orderIndex >= interview.numQuestions) {
       return reply.status(400).send({ error: "Invalid question for this interview" });
+    }
+
+    /**
+     * Once scoring has started this answer is settled. A late duplicate submission
+     * would reset the row and wipe scores processInterview had already written,
+     * leaving an interview with a summary but no per-question metrics.
+     */
+    if (interview.status !== "active") {
+      request.log.warn(
+        `[submit] Ignoring late submission for ${questionId}; interview is ${interview.status}.`
+      );
+      return reply.send({ ok: true, done: true, nextQuestion: null, ignored: true });
     }
 
     const ext = mimeType.includes("mp4") ? "m4a" : "webm";
@@ -172,6 +184,12 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
       voiceMeta = stt.voice_meta;
     } catch (e) {
       request.log.error({ err: e }, "[submit] transcription failed; processInterview will retry");
+    }
+
+    // Re-answering supersedes the previous clip; drop it rather than orphan it.
+    const previousUrl = (q.responses as any)?.storageUrl as string | undefined;
+    if (previousUrl && previousUrl !== storageUrl) {
+      void storageRemove(previousUrl);
     }
 
     const answerMeta = { mime_type: mimeType, voice_meta: voiceMeta };

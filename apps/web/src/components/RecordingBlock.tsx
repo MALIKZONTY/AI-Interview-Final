@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AudioLines, Loader2, Play } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,7 @@ export function RecordingBlock({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const durationProbed = useRef(false);
 
   // Object URLs leak until revoked, and results pages hold several of these.
   useEffect(() => {
@@ -29,6 +30,30 @@ export function RecordingBlock({
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [objectUrl]);
+
+  /**
+   * MediaRecorder writes a *live* WebM: the header carries no duration, so browsers
+   * report Infinity and render a scrubber that cannot be dragged. Seeking far past
+   * the end forces the browser to scan for the real duration; we then return to the
+   * start, and the progress bar behaves normally from there.
+   */
+  const recoverDuration = useCallback(() => {
+    const el = audioRef.current;
+    if (!el || durationProbed.current) return;
+    if (Number.isFinite(el.duration) && el.duration > 0) return;
+
+    durationProbed.current = true;
+    const onProgress = () => {
+      el.removeEventListener("timeupdate", onProgress);
+      el.currentTime = 0;
+    };
+    el.addEventListener("timeupdate", onProgress, { once: true });
+    try {
+      el.currentTime = 1e101;
+    } catch {
+      el.removeEventListener("timeupdate", onProgress);
+    }
+  }, []);
 
   if (!hasRecording) {
     return (
@@ -45,10 +70,7 @@ export function RecordingBlock({
       const { data } = await api.get<Blob>(`/interview/answer-audio/${questionId}`, {
         responseType: "blob",
       });
-      const url = URL.createObjectURL(data);
-      setObjectUrl(url);
-      // Autoplay once loaded — the click that got us here is the user gesture.
-      window.setTimeout(() => void audioRef.current?.play().catch(() => {}), 0);
+      setObjectUrl(URL.createObjectURL(data));
     } catch {
       setError("Recording could not be loaded.");
     } finally {
@@ -72,7 +94,15 @@ export function RecordingBlock({
       </p>
 
       {objectUrl ? (
-        <audio ref={audioRef} src={objectUrl} controls preload="metadata" className="w-full" />
+        <audio
+          ref={audioRef}
+          src={objectUrl}
+          controls
+          preload="auto"
+          className="w-full"
+          onLoadedMetadata={recoverDuration}
+          onDurationChange={recoverDuration}
+        />
       ) : (
         <Button
           variant="outline"
