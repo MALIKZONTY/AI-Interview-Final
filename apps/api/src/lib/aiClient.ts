@@ -144,3 +144,34 @@ export async function aiGenerateFollowUp(body: {
     return { should_follow_up: false, question: null };
   }
 }
+
+export type VideoMeta = {
+  face_detected_ratio: number;
+  eye_contact_score: number | null;
+  presence_score: number | null;
+  face_area_ratio_avg?: number;
+  frames_sampled?: number;
+  note?: string;
+};
+
+/**
+ * Eye contact and on-camera presence for one answer clip. Never throws — a missing
+ * visual signal leaves those metrics null rather than failing the whole answer.
+ */
+export async function aiAnalyzeVideo(videoBuffer: Buffer, mimeType: string): Promise<VideoMeta | null> {
+  try {
+    const FormData = (await import("form-data")).default;
+    const form = new FormData();
+    form.append("file", videoBuffer, { filename: "answer.webm", contentType: mimeType });
+    const { data } = await axios.post<VideoMeta>(`${base()}/analyze-video`, form, {
+      headers: form.getHeaders(),
+      timeout: 300_000,
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+    });
+    return data;
+  } catch (e) {
+    console.error("[ai] video analysis failed:", (e as Error).message);
+    return null;
+  }
+}

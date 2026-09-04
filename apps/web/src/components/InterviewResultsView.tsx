@@ -14,6 +14,8 @@ export type ResultRow = {
     text: string;
     transcript: string | null;
     hasRecording?: boolean;
+    recordingKind?: "audio" | "video";
+    eyeContactScore?: number | null;
     correctnessScore: number | null;
     confidenceScore: number | null;
     aiFeedback?: string | null;
@@ -188,9 +190,9 @@ export function InterviewResultsView({
                                             <TranscriptBlock transcript={r.transcript} />
                                         </div>
                                         <div className="space-y-3">
-                                            <Label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground ml-1">Answer Audio</Label>
+                                            <Label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground ml-1">Your Recording</Label>
                                             <div className="rounded-2xl border border-border overflow-hidden bg-muted/20">
-                                                <RecordingBlock questionId={r.id} hasRecording={r.hasRecording} />
+                                                <RecordingBlock questionId={r.id} hasRecording={r.hasRecording} kind={r.recordingKind ?? "audio"} />
                                             </div>
                                         </div>
                                     </div>
@@ -213,6 +215,12 @@ export function InterviewResultsView({
                                                 <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest opacity-60">Confidence</p>
                                                 <p className="text-3xl font-bold tracking-tight text-foreground/80">
                                                     {r.confidenceScore != null ? `${Math.round(r.confidenceScore)}%` : "—"}
+                                                </p>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest opacity-60">Eye Contact</p>
+                                                <p className="text-3xl font-bold tracking-tight text-foreground/80">
+                                                    {r.eyeContactScore != null ? `${Math.round(r.eyeContactScore)}%` : "—"}
                                                 </p>
                                             </div>
                                         </div>

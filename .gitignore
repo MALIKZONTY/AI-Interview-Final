@@ -16,3 +16,6 @@ temp
 
 # Local answer-audio storage (fallback when no cloud bucket is configured)
 storage/
+
+# MediaPipe face landmarker bundle (downloaded on first use)
+.models/

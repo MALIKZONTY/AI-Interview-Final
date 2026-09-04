@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Loader2, BrainCircuit, ShieldCheck, Clock, Zap, ClipboardList, Scan, Activity, Mic, Volume2, UserRound, CornerDownRight } from "lucide-react";
+import { Loader2, BrainCircuit, ShieldCheck, Clock, Zap, ClipboardList, Scan, Activity, Video, Volume2, UserRound, CornerDownRight } from "lucide-react";
 import { api } from "@/lib/api";
 import {
   InterviewResultsView,
@@ -18,26 +18,27 @@ const THINK_SECONDS = 10;
 
 function pickMimeType(): string {
   const candidates = [
-    "audio/webm;codecs=opus",
-    "audio/webm",
-    "audio/mp4",
-    "audio/ogg;codecs=opus",
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
+    "video/webm",
+    "video/mp4",
   ];
   for (const c of candidates) {
     if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(c)) {
       return c;
     }
   }
-  return "audio/webm";
+  return "video/webm";
 }
 
 /**
  * Timed interview. The interviewer reads each question aloud, the candidate answers
- * into the microphone, and the server may replace the next planned question with a
- * follow-up probing what was just said.
+ * on camera, and the server may replace the next planned question with a follow-up
+ * probing what was just said.
  *
- * Per question: ask (TTS) -> think -> record 30s -> upload. Nothing is captured from
- * the camera; scoring is transcript + vocal delivery only.
+ * Per question: ask (TTS) -> think -> record 30s -> upload. One clip carries both
+ * tracks: the audio drives the transcript and vocal delivery, the video drives eye
+ * contact only.
  */
 export function InterviewSessionPage() {
   const navigate = useNavigate();
@@ -46,6 +47,7 @@ export function InterviewSessionPage() {
   const clearSession = useInterviewStore((s) => s.clearSession);
   const replaceQuestion = useInterviewStore((s) => s.replaceQuestion);
 
+  const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -122,6 +124,14 @@ export function InterviewSessionPage() {
     async function media() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
+          // Modest resolution: eye contact needs a readable face, not a sharp one,
+          // and every extra megabit lands in storage and upload time.
+          video: {
+            facingMode: "user",
+            width: { ideal: 640, max: 640 },
+            height: { ideal: 480, max: 480 },
+            frameRate: { ideal: 20, max: 24 },
+          },
           audio: {
             echoCancellation: true,
             noiseSuppression: true,
@@ -133,6 +143,10 @@ export function InterviewSessionPage() {
           return;
         }
         streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play().catch(() => {});
+        }
 
         // Analyser drives the on-screen level meter only; no audio is sent anywhere from here.
         try {
@@ -152,7 +166,7 @@ export function InterviewSessionPage() {
 
         setStreamReady(true);
       } catch {
-        setMediaError("Microphone access is required for the session. Please allow it and reload.");
+        setMediaError("Camera and microphone access are required for the session. Please allow them and reload.");
       }
     }
 
@@ -188,7 +202,7 @@ export function InterviewSessionPage() {
     });
 
     if (blob.size < 2000) {
-      setError("No audio was captured. Check your microphone and try again.");
+      setError("Nothing was captured. Check your camera and microphone, then try again.");
       setPhase("arm");
       return;
     }
@@ -197,7 +211,7 @@ export function InterviewSessionPage() {
       const form = new FormData();
       form.append("interviewId", interviewId ?? "");
       form.append("questionId", q?.id ?? "");
-      form.append("audio", blob, blob.type.includes("mp4") ? "answer.m4a" : "answer.webm");
+      form.append("recording", blob, blob.type.includes("mp4") ? "answer.mp4" : "answer.webm");
       const { data } = await api.post<{
         ok: boolean;
         done: boolean;
@@ -243,6 +257,7 @@ export function InterviewSessionPage() {
     try {
       const rec = new MediaRecorder(stream, {
         mimeType: pickMimeType(),
+        videoBitsPerSecond: 1_000_000,
         audioBitsPerSecond: 128_000,
       });
       recorderRef.current = rec;
@@ -464,9 +479,9 @@ export function InterviewSessionPage() {
     return (
       <div className="mx-auto flex min-h-[70vh] max-w-lg flex-col items-center justify-center px-4 text-center">
         <div className="mb-8 flex h-20 w-20 items-center justify-center rounded-[1.75rem] border border-destructive/20 bg-destructive/5">
-          <Mic className="h-9 w-9 text-destructive" />
+          <Video className="h-9 w-9 text-destructive" />
         </div>
-        <h2 className="font-display text-3xl font-bold tracking-tight mb-4">Microphone Unavailable</h2>
+        <h2 className="font-display text-3xl font-bold tracking-tight mb-4">Camera or Microphone Unavailable</h2>
         <p className="text-base text-muted-foreground leading-relaxed mb-10">{mediaError}</p>
         <Button
           className="h-14 w-full rounded-2xl font-bold uppercase tracking-widest"
@@ -521,85 +536,57 @@ export function InterviewSessionPage() {
             <div className="absolute -inset-1 bg-primary/10 rounded-[3rem] blur-2xl opacity-20 transition-opacity group-hover:opacity-30"></div>
             
             <Card className="relative overflow-hidden border-border bg-black rounded-[3rem] shadow-2xl aspect-video border-[4px] border-black transition-all">
-                <div
-                  className="flex h-full w-full flex-col items-center justify-center gap-9 bg-gradient-to-b from-neutral-900 to-black transition-all duration-1000"
-                  style={{ opacity: phase === "uploading" ? 0.4 : 1, filter: phase === "uploading" ? "blur(4px)" : "none" }}
-                >
-                  {/* Whoever currently holds the floor: the interviewer, or the candidate's mic */}
-                  <div className="relative flex items-center justify-center">
-                    {phase === "asking" && (
-                      <>
-                        <div className="absolute h-44 w-44 rounded-full border border-primary/25 animate-ping [animation-duration:2s]" />
-                        <div className="absolute h-36 w-36 rounded-full border border-primary/40 animate-ping [animation-duration:2s] [animation-delay:0.4s]" />
-                      </>
-                    )}
-                    {phase === "recording" && (
-                      <div
-                        className="absolute rounded-full bg-primary/30 blur-2xl transition-transform duration-100"
-                        style={{
-                          width: 150,
-                          height: 150,
-                          transform: `scale(${1 + Math.max(...levels, 0) * 0.85})`,
-                        }}
-                      />
-                    )}
+                {/* Self view: framing feedback for the candidate, and the source of the eye-contact score */}
+                <video
+                  ref={videoRef}
+                  className="absolute inset-0 h-full w-full object-cover -scale-x-100 transition-all duration-700"
+                  playsInline
+                  muted
+                  autoPlay
+                  style={{
+                    opacity: phase === "uploading" ? 0.25 : phase === "asking" ? 0.35 : 1,
+                    filter: phase === "uploading" ? "blur(4px)" : "none",
+                  }}
+                />
 
-                    <div
-                      className={`relative z-10 flex h-28 w-28 items-center justify-center rounded-full border transition-colors duration-500 ${
-                        phase === "asking"
-                          ? "border-primary/50 bg-primary/15"
-                          : "border-white/15 bg-white/5 backdrop-blur-sm"
-                      }`}
-                    >
-                      {phase === "asking" ? (
+                {/* While the interviewer speaks, they take the foreground */}
+                {phase === "asking" && (
+                  <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-8 bg-black/45 backdrop-blur-sm animate-in fade-in duration-500">
+                    <div className="relative flex items-center justify-center">
+                      <div className="absolute h-44 w-44 rounded-full border border-primary/25 animate-ping [animation-duration:2s]" />
+                      <div className="absolute h-36 w-36 rounded-full border border-primary/40 animate-ping [animation-duration:2s] [animation-delay:0.4s]" />
+                      <div className="relative z-10 flex h-28 w-28 items-center justify-center rounded-full border border-primary/50 bg-primary/20 backdrop-blur-md">
                         <UserRound className="h-12 w-12 text-primary" />
-                      ) : (
-                        <Mic className={`h-11 w-11 ${phase === "recording" ? "text-white" : "text-white/40"}`} />
-                      )}
-                    </div>
-
-                    {phase === "asking" && (
+                      </div>
                       <div className="absolute -bottom-1 -right-1 z-20 flex h-9 w-9 items-center justify-center rounded-full border-2 border-black bg-primary">
                         <Volume2 className="h-4 w-4 text-white" />
                       </div>
-                    )}
+                    </div>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/60">
+                      Your interviewer is speaking
+                    </p>
                   </div>
+                )}
 
-                  {/* Bars: real mic levels while recording, a speaking cadence while asking */}
-                  <div className="flex h-24 items-end gap-1.5" aria-hidden>
-                    {levels.map((v, i) => (
-                      <div
-                        key={i}
-                        className={`w-2 rounded-full ${
-                          phase === "recording"
-                            ? "bg-primary transition-[height] duration-75"
-                            : phase === "asking"
-                              ? "bg-primary/60 animate-pulse"
-                              : "bg-white/15"
-                        }`}
-                        style={
-                          phase === "asking"
-                            ? {
-                                height: `${18 + ((i * 37) % 46)}px`,
-                                animationDelay: `${(i % 7) * 0.11}s`,
-                                animationDuration: "0.9s",
-                              }
-                            : { height: `${Math.max(4, v * 96)}px` }
-                        }
-                      />
-                    ))}
+                {/* Mic level, so a dead microphone is obvious before the answer is spent */}
+                {(phase === "recording" || phase === "reading") && (
+                  <div className="absolute inset-x-0 bottom-8 z-30 flex flex-col items-center gap-3 pointer-events-none">
+                    <div className="flex h-12 items-end gap-1" aria-hidden>
+                      {levels.map((v, i) => (
+                        <div
+                          key={i}
+                          className={`w-1.5 rounded-full transition-[height] duration-75 ${
+                            phase === "recording" ? "bg-primary" : "bg-white/25"
+                          }`}
+                          style={{ height: `${Math.max(3, v * 48)}px` }}
+                        />
+                      ))}
+                    </div>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/50">
+                      {phase === "recording" ? "Listening to your answer" : "Take a moment to think"}
+                    </p>
                   </div>
-
-                  <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/35">
-                    {phase === "asking"
-                      ? "Your interviewer is speaking"
-                      : phase === "recording"
-                        ? "Listening to your answer"
-                        : phase === "reading"
-                          ? "Take a moment to think"
-                          : "Microphone ready"}
-                  </p>
-                </div>
+                )}
 
                 {/* Corner Accents (The 'Wow' Factor) */}
                 <div className="absolute top-8 left-8 w-12 h-12 border-l-2 border-t-2 border-white/20 rounded-tl-xl pointer-events-none"></div>
@@ -753,7 +740,7 @@ export function InterviewSessionPage() {
                 ) : (
                   <div className="space-y-10 animate-in fade-in duration-1000">
                     <div className="p-6 rounded-2xl bg-muted/40 border border-border flex items-center justify-between shadow-inner">
-                       <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest ml-1 opacity-70">Microphone Active</span>
+                       <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest ml-1 opacity-70">Camera and Microphone Active</span>
                        <div className="flex gap-2">
                            <div className="w-2 h-2 rounded-full bg-primary/30 animate-pulse"></div>
                            <div className="w-2 h-2 rounded-full bg-primary/50 animate-pulse [animation-delay:0.3s]"></div>
@@ -767,7 +754,7 @@ export function InterviewSessionPage() {
                             <span className="text-[11px] font-black uppercase tracking-[0.2em]">Delivery Analysis</span>
                         </div>
                         <p className="text-base font-medium text-muted-foreground leading-relaxed">
-                            Speak clearly and at a steady pace. Your pace, pauses and tone are being measured.
+                            Speak clearly and look at the camera. Your pace, pauses, tone and eye contact are being measured.
                         </p>
                     </div>
                   </div>

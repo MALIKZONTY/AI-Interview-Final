@@ -7,6 +7,7 @@ import { storagePut, storageFetch, storageRemove } from "../lib/storage.js";
 import {
   aiGenerateQuestions,
   aiSpeechToText,
+  aiAnalyzeVideo,
   aiGenerateFollowUp,
   aiEvaluateAnswer,
   aiGenerateSummaryFeedback,
@@ -93,14 +94,15 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /**
-   * Answer upload — one audio clip per question, multipart with the file in `audio`.
-   * Transcription and scoring run later in processInterview; this just persists the clip.
+   * Answer upload — one clip per question, multipart with the file in `recording`.
+   * The clip carries both tracks; ffmpeg strips the video before transcription, and
+   * eye contact is scored from the same file later in processInterview.
    */
   app.post("/submit", { preHandler: [app.authenticate] }, async (request, reply) => {
     let interviewId = "";
     let questionId = "";
-    let audio: Buffer | null = null;
-    let mimeType = "audio/webm";
+    let recording: Buffer | null = null;
+    let mimeType = "video/webm";
 
     try {
       for await (const part of request.parts()) {
@@ -109,8 +111,8 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
           for await (const chunk of part.file) {
             chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
           }
-          if (part.fieldname === "audio") {
-            audio = Buffer.concat(chunks);
+          if (part.fieldname === "recording") {
+            recording = Buffer.concat(chunks);
             if (part.mimetype) mimeType = part.mimetype;
           }
         } else if (part.fieldname === "interviewId") {
@@ -127,10 +129,10 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
     if (!interviewId || !questionId) {
       return reply.status(400).send({ error: "interviewId and questionId required" });
     }
-    if (!audio || audio.length < 2000) {
-      return reply
-        .status(400)
-        .send({ error: "No audio captured for this question. Check your microphone and try again." });
+    if (!recording || recording.length < 2000) {
+      return reply.status(400).send({
+        error: "Nothing was captured for this question. Check your camera and microphone, then try again.",
+      });
     }
 
     const interview = await prisma.interview.findFirst({
@@ -157,19 +159,19 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
       return reply.send({ ok: true, done: true, nextQuestion: null, ignored: true });
     }
 
-    const ext = mimeType.includes("mp4") ? "m4a" : "webm";
+    const ext = mimeType.includes("mp4") ? "mp4" : "webm";
     const objectPath = `answers/${interviewId}/${questionId}_${Date.now()}.${ext}`;
 
     let storageUrl: string;
     try {
-      const stored = await storagePut("interview", objectPath, audio, mimeType);
+      const stored = await storagePut("interview", objectPath, recording, mimeType);
       storageUrl = stored.url;
     } catch (e) {
-      request.log.error({ err: e }, "[submit] failed to persist answer audio");
+      request.log.error({ err: e }, "[submit] failed to persist answer recording");
       return reply.status(500).send({ error: "Could not save your answer. Please try again." });
     }
 
-    console.log(`[submit] Stored ${audio.length} bytes of audio for ${questionId} at ${storageUrl}`);
+    console.log(`[submit] Stored ${recording.length} bytes for ${questionId} at ${storageUrl}`);
 
     /**
      * Transcribe now rather than at scoring time: the follow-up question is written
@@ -179,7 +181,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
     let transcript = "";
     let voiceMeta: Record<string, unknown> = {};
     try {
-      const stt = await aiSpeechToText(audio, mimeType);
+      const stt = await aiSpeechToText(recording, mimeType);
       transcript = stt.text;
       voiceMeta = stt.voice_meta;
     } catch (e) {
@@ -379,6 +381,11 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
           text: q.text,
           transcript: r?.transcript,
           hasRecording: Boolean((r as any)?.storageUrl),
+          recordingKind: String(((r as any)?.analysisMeta as any)?.mime_type || "").startsWith("video/")
+            ? "video"
+            : "audio",
+          eyeContactScore: ((r as any)?.analysisMeta as any)?.video_meta?.eye_contact_score ?? null,
+          presenceScore: ((r as any)?.analysisMeta as any)?.video_meta?.presence_score ?? null,
           correctnessScore: r?.correctnessScore,
           confidenceScore: r?.confidenceScore,
           aiFeedback: (r as any)?.aiFeedback,
@@ -446,6 +453,11 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
           text: q.text,
           transcript: r?.transcript,
           hasRecording: Boolean((r as any)?.storageUrl),
+          recordingKind: String(((r as any)?.analysisMeta as any)?.mime_type || "").startsWith("video/")
+            ? "video"
+            : "audio",
+          eyeContactScore: ((r as any)?.analysisMeta as any)?.video_meta?.eye_contact_score ?? null,
+          presenceScore: ((r as any)?.analysisMeta as any)?.video_meta?.presence_score ?? null,
           correctnessScore: r?.correctnessScore,
           confidenceScore: r?.confidenceScore,
           aiFeedback: (r as any)?.aiFeedback,
@@ -476,11 +488,11 @@ async function processInterview(interviewId: string): Promise<void> {
       const resp = q.responses as any;
       if (!(resp as any)?.storageUrl) continue;
 
-      let audioBuf: Buffer;
+      let clip: Buffer;
       try {
-        audioBuf = await storageFetch((resp as any).storageUrl);
+        clip = await storageFetch((resp as any).storageUrl);
       } catch (e) {
-        console.error(`Failed to read answer audio for ${q.id}`, e);
+        console.error(`Failed to read answer recording for ${q.id}`, e);
         continue;
       }
 
@@ -488,11 +500,17 @@ async function processInterview(interviewId: string): Promise<void> {
       const mime = storedMeta.mime_type || "audio/webm";
       let transcript = resp.transcript || "";
       let voiceMeta: Record<string, unknown> = storedMeta.voice_meta || {};
+      let videoMeta: Record<string, unknown> | null = storedMeta.video_meta ?? null;
+
+      // Eye contact only runs on clips that actually carry a video track.
+      if (mime.startsWith("video/") && videoMeta === null) {
+        videoMeta = (await aiAnalyzeVideo(clip, mime)) as Record<string, unknown> | null;
+      }
 
       // One pass gives us both the transcript and the delivery metrics.
       if (!transcript || Object.keys(voiceMeta).length === 0) {
         try {
-          const stt = await aiSpeechToText(audioBuf, mime);
+          const stt = await aiSpeechToText(clip, mime);
           transcript = transcript || stt.text;
           voiceMeta = stt.voice_meta;
         } catch (e) {
@@ -529,7 +547,7 @@ async function processInterview(interviewId: string): Promise<void> {
           correctnessScore: correctness,
           confidenceScore: confidence,
           aiFeedback: evalData.feedback || null,
-          analysisMeta: { mime_type: mime, voice_meta: voiceMeta } as any,
+          analysisMeta: { mime_type: mime, voice_meta: voiceMeta, video_meta: videoMeta } as any,
         } as any,
       });
       scores.push({ c: correctness, f: confidence });
