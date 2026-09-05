@@ -85,6 +85,22 @@ export function DashboardPage() {
     void loadHistory();
   }, [loadResume, loadHistory]);
 
+  /**
+   * The stored resume sits behind an authenticated endpoint, so it cannot be a plain
+   * link: fetch it as a blob and hand the browser an object URL instead.
+   */
+  async function openResume() {
+    try {
+      const { data } = await api.get<Blob>("/upload/resume/file", { responseType: "blob" });
+      const url = URL.createObjectURL(data);
+      window.open(url, "_blank", "noreferrer");
+      // Give the new tab time to claim the blob before releasing it.
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      setError("Could not open the stored resume.");
+    }
+  }
+
   async function onResumeFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -235,8 +251,13 @@ export function DashboardPage() {
                           </p>
                         </div>
                       </div>
-                      <Button variant="outline" size="sm" className="w-full rounded-xl h-9 text-[10px] font-bold tracking-widest uppercase border-border hover:bg-muted transition-colors" asChild>
-                        <a href={resume.url} target="_blank" rel="noreferrer">Review Source PDF</a>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full rounded-xl h-9 text-[10px] font-bold tracking-widest uppercase border-border hover:bg-muted transition-colors"
+                        onClick={() => void openResume()}
+                      >
+                        Review Source PDF
                       </Button>
                     </div>
                   ) : (

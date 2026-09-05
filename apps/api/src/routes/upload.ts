@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { storageUpload } from "../lib/supabase.js";
+import { storagePut, storageFetch } from "../lib/storage.js";
 import { prisma } from "../lib/prisma.js";
 import { Readable } from "node:stream";
 import pdf from "pdf-parse/lib/pdf-parse.js";
@@ -27,6 +27,28 @@ const uploadRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: "Invalid job description", details: parsed.error.flatten() });
     }
     return reply.send({ ok: true, length: parsed.data.text.length });
+  });
+
+  /**
+   * Streams the stored resume back to its owner. The stored locator is a private
+   * `supabase://` or `local://` path, so it is never linkable directly.
+   */
+  app.get("/resume/file", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const resume = await prisma.resume.findUnique({ where: { userId: request.userId } });
+    if (!resume?.url) {
+      return reply.status(404).send({ error: "No resume stored" });
+    }
+    try {
+      const buffer = await storageFetch(resume.url);
+      return reply
+        .header("Content-Type", "application/pdf")
+        .header("Content-Length", String(buffer.length))
+        .header("Content-Disposition", `inline; filename="${(resume.fileName || "resume.pdf").replace(/"/g, "")}"`)
+        .send(buffer);
+    } catch (e) {
+      request.log.error({ err: e }, "[upload] could not read stored resume");
+      return reply.status(410).send({ error: "Resume is no longer available" });
+    }
   });
 
   app.post("/resume", { preHandler: [app.authenticate] }, async (request, reply) => {
@@ -58,9 +80,9 @@ const uploadRoutes: FastifyPluginAsync = async (app) => {
       let uploaded;
       try {
         const path = `resumes/${request.userId}_${Date.now()}.pdf`;
-        uploaded = await storageUpload("interview", path, buffer, "application/pdf");
+        uploaded = await storagePut("interview", path, buffer, "application/pdf");
       } catch (e) {
-        console.error("[upload] Supabase upload failed:", e);
+        console.error("[upload] Failed to persist resume:", e);
         throw e;
       }
 
@@ -84,7 +106,7 @@ const uploadRoutes: FastifyPluginAsync = async (app) => {
       return reply.send({ resume });
     } catch (e) {
       console.error(e);
-      return reply.status(500).send({ error: "Supabase upload failed. Check SUPABASE_* env." });
+      return reply.status(500).send({ error: "Could not save the resume. Please try again." });
     }
   });
 };

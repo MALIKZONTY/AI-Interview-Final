@@ -1,7 +1,7 @@
 import axios from "axios";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
-import { supabase, storageUpload, storageDelete } from "./supabase.js";
+import { supabase, storageUpload, storageDelete, downloadFile } from "./supabase.js";
 
 /**
  * Storage with a local-disk fallback.
@@ -13,9 +13,23 @@ import { supabase, storageUpload, storageDelete } from "./supabase.js";
 
 const LOCAL_ROOT = resolve(process.cwd(), "storage");
 const LOCAL_PREFIX = "local://";
+const REMOTE_PREFIX = "supabase://";
 
 export function isLocalUrl(url: string): boolean {
   return url.startsWith(LOCAL_PREFIX);
+}
+
+export function isRemoteUrl(url: string): boolean {
+  return url.startsWith(REMOTE_PREFIX);
+}
+
+function splitPrefixedUrl(url: string, prefix: string): { bucket: string; path: string } {
+  const rest = url.slice(prefix.length);
+  const slash = rest.indexOf("/");
+  if (slash < 1 || slash === rest.length - 1) {
+    throw new Error(`Malformed storage url: ${url}`);
+  }
+  return { bucket: rest.slice(0, slash), path: rest.slice(slash + 1) };
 }
 
 /** Resolves bucket/path under LOCAL_ROOT, refusing anything that escapes it. */
@@ -27,14 +41,7 @@ function localPathFor(bucket: string, path: string): string {
   return target;
 }
 
-function splitLocalUrl(url: string): { bucket: string; path: string } {
-  const rest = url.slice(LOCAL_PREFIX.length);
-  const slash = rest.indexOf("/");
-  if (slash < 1 || slash === rest.length - 1) {
-    throw new Error(`Malformed local storage url: ${url}`);
-  }
-  return { bucket: rest.slice(0, slash), path: rest.slice(slash + 1) };
-}
+
 
 /** Writes a buffer to Supabase when available, else to local disk. */
 export async function storagePut(
@@ -45,7 +52,13 @@ export async function storagePut(
 ): Promise<{ url: string; path: string }> {
   if (supabase) {
     try {
-      return await storageUpload(bucket, path, buffer, contentType);
+      await storageUpload(bucket, path, buffer, contentType);
+      /**
+       * Deliberately not the public URL. Recordings are someone's face and voice, so
+       * the bucket stays private and everything is read back through the service-role
+       * client behind an owner check. A public URL would make any leaked link playable.
+       */
+      return { url: `${REMOTE_PREFIX}${bucket}/${path}`, path };
     } catch (e) {
       console.warn(
         `[storage] Supabase upload failed (${(e as Error).message}); falling back to local disk.`
@@ -62,9 +75,14 @@ export async function storagePut(
 /** Reads back whatever storagePut wrote, local or remote. */
 export async function storageFetch(url: string): Promise<Buffer> {
   if (isLocalUrl(url)) {
-    const { bucket, path } = splitLocalUrl(url);
+    const { bucket, path } = splitPrefixedUrl(url, LOCAL_PREFIX);
     return readFileSync(localPathFor(bucket, path));
   }
+  if (isRemoteUrl(url)) {
+    const { bucket, path } = splitPrefixedUrl(url, REMOTE_PREFIX);
+    return downloadFile(bucket, path);
+  }
+  // Plain https: rows written before the private-bucket change, still public.
   const res = await axios.get<ArrayBuffer>(url, {
     responseType: "arraybuffer",
     timeout: 120_000,
@@ -78,13 +96,18 @@ export async function storageFetch(url: string): Promise<Buffer> {
 export async function storageRemove(url: string): Promise<void> {
   try {
     if (isLocalUrl(url)) {
-      const { bucket, path } = splitLocalUrl(url);
+      const { bucket, path } = splitPrefixedUrl(url, LOCAL_PREFIX);
       const target = localPathFor(bucket, path);
       if (existsSync(target)) unlinkSync(target);
       return;
     }
-    // Remote urls are public links; recover the object path after the bucket segment.
-    const marker = `/${"interview"}/`;
+    if (isRemoteUrl(url)) {
+      const { bucket, path } = splitPrefixedUrl(url, REMOTE_PREFIX);
+      await storageDelete(bucket, path);
+      return;
+    }
+    // Legacy public link: recover the object path after the bucket segment.
+    const marker = "/interview/";
     const idx = url.indexOf(marker);
     if (idx >= 0) {
       await storageDelete("interview", url.slice(idx + marker.length));
