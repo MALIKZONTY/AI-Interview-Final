@@ -11,6 +11,11 @@ Gradio owns the HTTP server here — the Space runtime starts it and it cannot b
 displaced — so the FastAPI service is mounted onto the app Gradio builds. Gradio
 answers its own routes; everything else falls through to the API at the paths the
 Node client already expects.
+
+Nothing ASGI is exposed at module level on purpose. The Space runs Gradio's
+hot-reloader, which scans this module for a name called `demo` and launches
+whatever it finds; handed a FastAPI it tried to launch that as a Blocks and
+brought the container down. Everything is built inside _serve() instead.
 """
 
 import os
