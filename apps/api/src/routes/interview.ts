@@ -236,6 +236,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
             candidateAnswer: transcript,
             plannedNext: planned.text,
             difficulty: interview.difficulty ?? "Medium",
+            keywords: (q.keywords as string[]) || [],
           });
 
           if (decision.should_follow_up && decision.question) {

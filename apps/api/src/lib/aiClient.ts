@@ -125,6 +125,7 @@ export async function aiGenerateFollowUp(body: {
   candidateAnswer: string;
   plannedNext: string;
   difficulty?: string;
+  keywords?: string[];
 }): Promise<FollowUpDecision> {
   try {
     const { data } = await axios.post<FollowUpDecision>(
@@ -135,6 +136,7 @@ export async function aiGenerateFollowUp(body: {
         candidate_answer: body.candidateAnswer,
         planned_next: body.plannedNext,
         difficulty: body.difficulty ?? "Medium",
+        keywords: body.keywords ?? [],
       },
       { timeout: 45_000 }
     );

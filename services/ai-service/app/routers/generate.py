@@ -234,6 +234,7 @@ class FollowUpBody(BaseModel):
     candidate_answer: str
     planned_next: str = ""
     difficulty: str = Field(default="Medium")
+    keywords: list[str] = []
 
 
 class FollowUpDecision(BaseModel):
@@ -244,6 +245,42 @@ class FollowUpDecision(BaseModel):
     question: GeneratedAIQuestion | None = Field(
         default=None, description="The follow-up question; omit entirely when should_follow_up is false"
     )
+
+
+# A candidate saying they do not know is a complete answer to the question asked.
+# Re-probing the same topic earns them a second zero for one gap, so the interview
+# moves on instead.
+_NON_ANSWER_RE = re.compile(
+    r"\b("
+    r"i (?:do ?n['o]?t|dont|don't) know"
+    r"|i (?:have|haven'?t|ha ?ve ?n'?t) (?:never |not )?(?:heard|encountered|come across|dealt|worked|used|read)"
+    r"|never (?:heard|encountered|used|done|seen)"
+    r"|not (?:familiar|sure|aware)"
+    r"|no (?:idea|experience)"
+    r"|can'?t (?:answer|recall|remember)"
+    r"|skip this"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _is_non_answer(answer: str, question: str, keywords: list[str] | None = None) -> bool:
+    """True when the candidate disclaimed knowledge and offered nothing substantive."""
+    if not _NON_ANSWER_RE.search(answer):
+        return False
+
+    # A disclaimer followed by real content ("I have never used valgrind, but I use
+    # gdb to get a backtrace...") is still worth probing. Only terms the question did
+    # not already supply count as content — echoing "segmentation fault" back is not
+    # knowledge, it is repeating the question.
+    lowered = answer.lower()
+    asked = question.lower()
+    novel = [
+        str(k).lower()
+        for k in (keywords or [])
+        if len(str(k)) > 3 and str(k).lower() not in asked
+    ]
+    return not any(k in lowered for k in novel)
 
 
 @router.post("/generate-followup")
@@ -259,6 +296,8 @@ async def generate_followup(body: FollowUpBody):
     # Nothing to probe — no answer means no thread to pull on.
     if len(answer.split()) < 8:
         return {"should_follow_up": False, "reason": "answer_too_short_to_probe", "question": None}
+    if _is_non_answer(answer, body.question, body.keywords):
+        return {"should_follow_up": False, "reason": "candidate_disclaimed_knowledge", "question": None}
 
     model_name = os.getenv("OPENAI_MODEL", "openai/gpt-oss-20b")
 
@@ -287,6 +326,9 @@ async def generate_followup(body: FollowUpBody):
     - The answer was thorough and there is no natural next thread to pull.
     - A follow-up would just rephrase the same question.
     - It would duplicate the planned next question, or drift away from the job description.
+    - The candidate said they do not know the topic, have never encountered it, or cannot
+      answer. That is a complete answer. Asking it again hypothetically ("if you did, how
+      would you...") scores them zero twice for one gap. Move to a different subject.
 
     Prefer moving on when it is a close call. A good interview covers ground.
 
