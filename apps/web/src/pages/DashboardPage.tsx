@@ -28,11 +28,12 @@ type HistoryItem = {
   result: { avgCorrectness: number; avgConfidence: number } | null;
 };
 
-function getJDTitle(text?: string) {
-  if (!text) return "General Session";
-  const firstLine = text.split('\n')[0].trim();
+/** Card title for a past session: its topic, or a note that it came from the resume. */
+function sessionTitle(topic?: string) {
+  if (!topic?.trim()) return "Resume-based session";
+  const firstLine = topic.split('\n')[0].trim();
   if (firstLine.length > 40) return firstLine.substring(0, 40) + "...";
-  return firstLine || "General Session";
+  return firstLine || "Resume-based session";
 }
 
 export function DashboardPage() {
@@ -121,11 +122,11 @@ export function DashboardPage() {
     setError(null);
 
     if (source === "jd" && jdText.trim().length < 10) {
-      setError("Please provide a Job Description (at least 10 characters).");
+      setError("Describe the topic you want to be interviewed on (at least 10 characters).");
       return;
     }
     if (source === "resume" && !resume) {
-      setError("Upload a resume first, or switch to a job description.");
+      setError("Upload a resume first, or switch to a topic.");
       return;
     }
 
@@ -313,12 +314,12 @@ export function DashboardPage() {
                     >
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-bold uppercase tracking-widest text-foreground">
-                          Job Description
+                          Topic
                         </span>
                         {source === "jd" && <CheckCircle2 className="h-4 w-4 text-primary" />}
                       </div>
                       <p className="text-[11px] font-medium text-muted-foreground leading-relaxed">
-                        Questions about a role you are targeting.
+                        A subject, syllabus or job description to be questioned on.
                       </p>
                     </button>
 
@@ -349,7 +350,7 @@ export function DashboardPage() {
                 {source === "jd" ? (
                   <textarea
                     className="flex min-h-[180px] w-full rounded-2xl border border-border bg-muted/20 px-8 py-6 text-base font-medium placeholder:text-muted-foreground/30 focus:bg-background focus:border-primary/40 focus:ring-4 focus:ring-primary/5 transition-all resize-none shadow-sm"
-                    placeholder="Paste the target job description here..."
+                    placeholder="What should this interview cover? e.g. C programming basics up to arrays — or paste a full job description."
                     value={jdText}
                     onChange={(e) => setJdText(e.target.value)}
                   />
@@ -365,7 +366,7 @@ export function DashboardPage() {
                         </div>
                         <p className="text-sm font-medium text-muted-foreground leading-relaxed">
                           Questions will come from the projects, skills and experience in this
-                          document. No job description is used.
+                          document. No topic is used.
                         </p>
                       </>
                     ) : (
@@ -377,7 +378,7 @@ export function DashboardPage() {
                           </span>
                         </div>
                         <p className="text-sm font-medium text-muted-foreground leading-relaxed">
-                          Upload one in the panel on the left, or switch to a job description.
+                          Upload one in the panel on the left, or switch to a topic.
                         </p>
                       </>
                     )}
@@ -488,7 +489,7 @@ export function DashboardPage() {
                           </div>
                         </div>
                         <CardTitle className="text-xl font-bold tracking-tight leading-tight text-foreground line-clamp-2 pr-6">
-                          {getJDTitle(h.jdText)}
+                          {sessionTitle(h.jdText)}
                         </CardTitle>
                       </div>
                     </CardHeader>

@@ -24,7 +24,7 @@ const uploadRoutes: FastifyPluginAsync = async (app) => {
   app.post("/jd", { preHandler: [app.authenticate] }, async (request, reply) => {
     const parsed = jdSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.status(400).send({ error: "Invalid job description", details: parsed.error.flatten() });
+      return reply.status(400).send({ error: "Invalid topic", details: parsed.error.flatten() });
     }
     return reply.send({ ok: true, length: parsed.data.text.length });
   });

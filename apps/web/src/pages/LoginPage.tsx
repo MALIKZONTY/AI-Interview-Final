@@ -50,7 +50,7 @@ export function LoginPage() {
     { 
         icon: UploadCloud, 
         title: "Upload Your Profile", 
-        desc: "Add your resume and the job description you want. Our AI instantly reads your resume and JD and generates questions.",
+        desc: "Give it a topic, or upload your resume. The AI reads whichever you choose and builds the questions from it.",
         color: "text-blue-400"
     },
     { 

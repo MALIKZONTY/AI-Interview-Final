@@ -65,7 +65,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
     if (source === "jd" && jdText.length < 10) {
       return reply
         .status(400)
-        .send({ error: "Paste a job description of at least 10 characters to start." });
+        .send({ error: "Describe the interview topic in at least 10 characters to start." });
     }
     if (source === "resume" && resumeSummary.length < 40) {
       return reply.status(400).send({
