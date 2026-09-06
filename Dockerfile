@@ -1,13 +1,8 @@
-# Hugging Face Space image — the Python AI service only.
+# Container image for the Python AI service — Whisper, MediaPipe and Piper.
 #
-# HF builds from the repository root, so this file must live here even though
-# everything it needs is under services/ai-service. The web app and the Node API
-# are deployed separately (see render.yaml); this container hosts Whisper,
-# MediaPipe and Piper, which are the parts that actually need the memory.
-#
-# The free CPU tier gives far more RAM than these models need. Storage is
-# ephemeral, so roughly 300MB of model weights is fetched on the first request
-# after each cold start.
+# NOT what Hugging Face builds. The Docker SDK is a paid Space feature, so the
+# Space runs on the Gradio SDK via space_app.py instead. This file is here for
+# any host that takes a Dockerfile: Cloud Run, Fly, Koyeb, or a paid HF Space.
 
 FROM python:3.12-slim
 

@@ -3,8 +3,8 @@ title: Evolve AI Interview
 emoji: 🚀
 colorFrom: sky
 colorTo: indigo
-sdk: docker
-app_port: 7860
+sdk: gradio
+app_file: space_app.py
 pinned: true
 ---
 

@@ -1,0 +1,8 @@
+# Hugging Face Space dependencies.
+#
+# The Space runs the AI service from services/ai-service; this file exists at the
+# repository root only because that is where Hugging Face looks.
+-r services/ai-service/requirements.txt
+
+# Landing page for the Space. The API works without it — see space_app.py.
+gradio>=4.44.0
