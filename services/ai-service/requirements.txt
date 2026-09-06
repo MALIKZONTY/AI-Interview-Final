@@ -11,7 +11,15 @@ scikit-learn==1.6.0
 faster-whisper>=1.0.3
 # Interviewer voice — local neural TTS; voice model downloads on first use
 piper-tts>=1.7.0
-# Local semantic similarity for scoring — pretrained MiniLM; pulls torch
+# Local semantic similarity for scoring — pretrained MiniLM; pulls torch.
+#
+# This is the single largest thing in the image: torch and transformers together are
+# roughly 500MB on disk and several hundred MB of RAM. It is also entirely optional —
+# evaluate.py imports it lazily and falls back cleanly when it is absent, and it only
+# feeds the local heuristics that run when the LLM judge is unreachable.
+#
+# Comment it out to fit a smaller instance; correctness scoring is unaffected while
+# Groq is reachable, and the offline fallback simply loses its semantic component.
 sentence-transformers>=3.3.0
 # Optional heavier STT (PyTorch): pip install openai-whisper
 # openai-whisper==20240930

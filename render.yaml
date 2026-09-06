@@ -1,23 +1,100 @@
+# Render Blueprint — all three pieces of the app.
+#
+#   ai-interview-web   static Vite build
+#   ai-interview-api   Fastify API, Prisma against Neon, Supabase for recordings
+#   ai-interview-ai    Python service: Whisper, MediaPipe, Piper
+#
+# After the first deploy, set VITE_API_URL on the web service to the API's URL and
+# redeploy it — a static site bakes its env vars in at build time, and Render cannot
+# compose a full URL from another service inside this file.
+
 services:
-  # 1. Node.js Backend API
+  # ---------------------------------------------------------------------------
+  # 1. Frontend
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: ai-interview-web
+    runtime: static
+    buildCommand: corepack enable && pnpm install --no-frozen-lockfile && pnpm --filter @interview/web build
+    staticPublishPath: apps/web/dist
+    envVars:
+      # Full https URL of ai-interview-api, e.g. https://ai-interview-api.onrender.com
+      # Baked into the bundle at build time, so changing it needs a redeploy.
+      - key: VITE_API_URL
+        sync: false
+    routes:
+      # Single-page app: every unknown path serves the shell and React routes it.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+  # ---------------------------------------------------------------------------
+  # 2. Node API
+  # ---------------------------------------------------------------------------
   - type: web
     name: ai-interview-api
-    env: node
-    rootDir: apps/api
-    buildCommand: pnpm install && pnpm run build
-    startCommand: pnpm start
+    runtime: docker
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: ./apps/api
+    healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
+      # Neon connection string, including ?sslmode=require
       - key: DATABASE_URL
-        sync: false # Set in Render Dashboard
+        sync: false
       - key: JWT_SECRET
         generateValue: true
-      - key: CLOUDINARY_CLOUD_NAME
+      # Exact origin of the web service; the CORS allowlist checks against it.
+      - key: FRONTEND_URL
         sync: false
-      - key: CLOUDINARY_API_KEY
+      # Private Supabase bucket named "interview" holds resumes and recordings.
+      # Omit both and the API falls back to local disk, which Render wipes on restart.
+      - key: SUPABASE_URL
         sync: false
-      - key: CLOUDINARY_API_SECRET
+      - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      # Full https URL of ai-interview-ai. Render cannot compose a scheme onto
+      # fromService's host:port, and axios needs one, so this is set by hand.
       - key: AI_SERVICE_URL
-        sync: false # Set in Render Dashboard to your Hugging Face Space URL
+        sync: false
+
+  # ---------------------------------------------------------------------------
+  # 3. Python AI service
+  # ---------------------------------------------------------------------------
+  # Needs more memory than the free tier gives: Whisper, MediaPipe and Piper all sit
+  # in RAM together. It also downloads roughly 300MB of model weights on first use,
+  # and repeats that after every restart unless a persistent disk is attached.
+  - type: web
+    name: ai-interview-ai
+    runtime: docker
+    plan: standard
+    dockerfilePath: ./services/ai-service/Dockerfile
+    dockerContext: ./services/ai-service
+    healthCheckPath: /health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_BASE_URL
+        value: https://api.groq.com/openai/v1
+      # Must be a model the key can actually reach; the Llama ids are decommissioned.
+      - key: OPENAI_MODEL
+        value: openai/gpt-oss-20b
+      # Point the Hugging Face cache at the disk below; otherwise Whisper's weights
+      # sit on the ephemeral filesystem and download again after every restart.
+      - key: HF_HOME
+        value: /app/.models/hf
+      - key: WHISPER_MODEL_SIZE
+        value: base
+      - key: WHISPER_DEVICE
+        value: cpu
+      - key: WHISPER_COMPUTE_TYPE
+        value: int8
+      - key: CORS_ORIGINS
+        sync: false
+    disk:
+      # Keeps Whisper, Piper and the face landmarker across restarts. Without it the
+      # first request after every deploy pays for the download again.
+      name: models
+      mountPath: /app/.models
+      sizeGB: 2

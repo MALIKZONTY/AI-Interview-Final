@@ -1,0 +1,10 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# Model bundles are fetched on first use; baking them in would bloat the image.
+.models/
+.env
+test_*.py
+test_*.json
