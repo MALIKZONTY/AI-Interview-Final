@@ -15,7 +15,6 @@ const USERNAME = z
   .max(32, "Username must be 32 characters or fewer");
 
 const registerSchema = z.object({
-  name: z.string().trim().min(1),
   username: USERNAME,
   password: z.string().min(8),
   confirmPassword: z.string().min(8),
@@ -36,7 +35,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) {
       return reply.status(400).send({ error: "Invalid body", details: parsed.error.flatten() });
     }
-    const { name, username, password, confirmPassword } = parsed.data;
+    const { username, password, confirmPassword } = parsed.data;
     if (password !== confirmPassword) {
       return reply.status(400).send({ error: "Passwords do not match" });
     }
@@ -49,7 +48,10 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       // `password` keeps the plaintext beside the hash at the project owner's
       // request. Login still verifies against the hash; nothing reads this column.
       // The select below deliberately omits it so it never leaves the server.
-      data: { name, username, passwordHash, password },
+      // `name` is no longer collected — sign-up asks for a username and nothing
+      // else. The column is NOT NULL and older accounts have real names in it, so
+      // rather than change the schema, new accounts mirror their username here.
+      data: { name: username, username, passwordHash, password },
       select: { id: true, name: true, username: true },
     });
     const token = app.jwt.sign({ sub: user.id });

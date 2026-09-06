@@ -1,5 +1,5 @@
 import { Link, Outlet, useNavigate } from "react-router-dom";
-import { Command, Target } from "lucide-react";
+import { Command } from "lucide-react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/store/authStore";
@@ -23,7 +23,7 @@ export function AppLayout() {
             {user && (
               <>
                 <div className="h-4 w-[1px] bg-border mx-2" />
-                <span className="hidden sm:inline text-[10px] font-bold uppercase tracking-widest text-muted-foreground">{user.name}</span>
+                <span className="hidden sm:inline text-[10px] font-bold uppercase tracking-widest text-muted-foreground">{user.username}</span>
                 <Button
                   variant="ghost"
                   size="sm"

@@ -9,7 +9,6 @@ import { Label } from "@/components/ui/label";
 import { AuthShowcase } from "@/components/AuthShowcase";
 
 export function SignupPage() {
-  const [name, setName] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -42,7 +41,7 @@ export function SignupPage() {
       const { data } = await api.post<{
         token: string;
         user: { id: string; name: string; username: string };
-      }>("/auth/register", { name, username, password, confirmPassword });
+      }>("/auth/register", { username, password, confirmPassword });
       setAuth(data.token, data.user);
       navigate("/", { replace: true });
     } catch (err: unknown) {
@@ -90,18 +89,6 @@ export function SignupPage() {
             <div className="space-y-10">
               <form onSubmit={onSubmit} className="space-y-8">
                 <div className="space-y-6">
-                  <div className="space-y-2">
-                    <Label htmlFor="name" className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground ml-1">Name</Label>
-                    <Input
-                      id="name"
-                      autoComplete="name"
-                      required
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="your name"
-                      className="h-14 rounded-2xl bg-card border-border focus:border-primary/40 focus:ring-4 focus:ring-primary/5 transition-all font-medium text-foreground shadow-sm"
-                    />
-                  </div>
                   <div className="space-y-2">
                     <Label htmlFor="username" className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground ml-1">Username</Label>
                     <Input
