@@ -346,6 +346,33 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
       .send(audio);
   });
 
+  /** Poster frame for an answer recording, so results can show it without the video. */
+  app.get("/answer-thumb/:questionId", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { questionId } = request.params as { questionId: string };
+
+    const question = await prisma.question.findFirst({
+      where: { id: questionId, interview: { userId: request.userId } },
+      include: { responses: true },
+    });
+    const meta = ((question?.responses as any)?.analysisMeta as Record<string, any>) || {};
+    const thumbUrl = meta.video_meta?.thumb_url as string | undefined;
+    if (!thumbUrl) {
+      return reply.status(404).send({ error: "No poster frame for this answer" });
+    }
+
+    try {
+      const buffer = await storageFetch(thumbUrl);
+      return reply
+        .header("Content-Type", "image/jpeg")
+        .header("Content-Length", String(buffer.length))
+        .header("Cache-Control", "private, max-age=86400")
+        .send(buffer);
+    } catch (e) {
+      request.log.error({ err: e }, `[answer-thumb] could not read ${thumbUrl}`);
+      return reply.status(410).send({ error: "Poster frame is no longer available" });
+    }
+  });
+
   /**
    * Streams a stored answer recording back to its owner. The stored locator may be a
    * `local://` path, which the browser cannot fetch, so the file is always served
@@ -418,6 +445,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
           recordingKind: String(((r as any)?.analysisMeta as any)?.mime_type || "").startsWith("video/")
             ? "video"
             : "audio",
+          hasThumbnail: Boolean(((r as any)?.analysisMeta as any)?.video_meta?.thumb_url),
           eyeContactScore: ((r as any)?.analysisMeta as any)?.video_meta?.eye_contact_score ?? null,
           presenceScore: ((r as any)?.analysisMeta as any)?.video_meta?.presence_score ?? null,
           correctnessScore: r?.correctnessScore,
@@ -490,6 +518,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
           recordingKind: String(((r as any)?.analysisMeta as any)?.mime_type || "").startsWith("video/")
             ? "video"
             : "audio",
+          hasThumbnail: Boolean(((r as any)?.analysisMeta as any)?.video_meta?.thumb_url),
           eyeContactScore: ((r as any)?.analysisMeta as any)?.video_meta?.eye_contact_score ?? null,
           presenceScore: ((r as any)?.analysisMeta as any)?.video_meta?.presence_score ?? null,
           correctnessScore: r?.correctnessScore,
@@ -539,6 +568,27 @@ async function processInterview(interviewId: string): Promise<void> {
       // Eye contact only runs on clips that actually carry a video track.
       if (mime.startsWith("video/") && videoMeta === null) {
         videoMeta = (await aiAnalyzeVideo(clip, mime)) as Record<string, unknown> | null;
+
+        /**
+         * The poster frame goes to storage, not into analysisMeta: a base64 JPEG in
+         * every row would bloat the results payload for no benefit, since the image
+         * is served on its own route.
+         */
+        const encoded = videoMeta?.thumbnail;
+        if (videoMeta && typeof encoded === "string" && encoded.length > 0) {
+          try {
+            const stored = await storagePut(
+              "interview",
+              `answers/${interviewId}/${q.id}_thumb.jpg`,
+              Buffer.from(encoded, "base64"),
+              "image/jpeg"
+            );
+            videoMeta.thumb_url = stored.url;
+          } catch (e) {
+            console.error(`Failed to store poster frame for ${q.id}`, e);
+          }
+          delete videoMeta.thumbnail;
+        }
       }
 
       // One pass gives us both the transcript and the delivery metrics.

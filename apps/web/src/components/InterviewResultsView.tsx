@@ -14,6 +14,7 @@ export type ResultRow = {
     text: string;
     transcript: string | null;
     hasRecording?: boolean;
+    hasThumbnail?: boolean;
     recordingKind?: "audio" | "video";
     eyeContactScore?: number | null;
     correctnessScore: number | null;
@@ -192,7 +193,12 @@ export function InterviewResultsView({
                                         <div className="space-y-3">
                                             <Label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground ml-1">Your Recording</Label>
                                             <div className="rounded-2xl border border-border overflow-hidden bg-muted/20">
-                                                <RecordingBlock questionId={r.id} hasRecording={r.hasRecording} kind={r.recordingKind ?? "audio"} />
+                                                <RecordingBlock
+                                                    questionId={r.id}
+                                                    hasRecording={r.hasRecording}
+                                                    hasThumbnail={r.hasThumbnail}
+                                                    kind={r.recordingKind ?? "audio"}
+                                                />
                                             </div>
                                         </div>
                                     </div>

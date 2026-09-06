@@ -14,10 +14,12 @@ import { Button } from "@/components/ui/button";
 export function RecordingBlock({
   questionId,
   hasRecording,
+  hasThumbnail,
   kind = "audio",
 }: {
   questionId: string;
   hasRecording?: boolean;
+  hasThumbnail?: boolean;
   kind?: "audio" | "video";
 }) {
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
@@ -25,6 +27,34 @@ export function RecordingBlock({
   const [error, setError] = useState<string | null>(null);
   const mediaRef = useRef<HTMLMediaElement>(null);
   const durationProbed = useRef(false);
+  const [posterUrl, setPosterUrl] = useState<string | null>(null);
+
+  /**
+   * The poster is a few tens of KB, so it loads straight away and the answer is
+   * visible at a glance. The video itself stays behind a click — a results page
+   * with five answers would otherwise pull twenty megabytes on open.
+   */
+  useEffect(() => {
+    if (kind !== "video" || !hasRecording || !hasThumbnail) return;
+    let revoked: string | null = null;
+    let cancelled = false;
+
+    api
+      .get<Blob>(`/interview/answer-thumb/${questionId}`, { responseType: "blob" })
+      .then(({ data }) => {
+        if (cancelled) return;
+        revoked = URL.createObjectURL(data);
+        setPosterUrl(revoked);
+      })
+      .catch(() => {
+        // No poster is fine; the play button below still works.
+      });
+
+    return () => {
+      cancelled = true;
+      if (revoked) URL.revokeObjectURL(revoked);
+    };
+  }, [questionId, kind, hasRecording, hasThumbnail]);
 
   // Object URLs leak until revoked, and results pages hold several of these.
   useEffect(() => {
@@ -73,6 +103,8 @@ export function RecordingBlock({
         responseType: "blob",
       });
       setObjectUrl(URL.createObjectURL(data));
+      // The click that got us here is the user gesture autoplay needs.
+      window.setTimeout(() => void mediaRef.current?.play().catch(() => {}), 0);
     } catch {
       setError("Recording could not be loaded.");
     } finally {
@@ -122,6 +154,25 @@ export function RecordingBlock({
             onDurationChange={recoverDuration}
           />
         )
+      ) : posterUrl ? (
+        <button
+          type="button"
+          onClick={() => void load()}
+          disabled={loading}
+          className="group relative block w-full overflow-hidden rounded-lg bg-black"
+          aria-label="Play your recorded answer"
+        >
+          <img src={posterUrl} alt="" className="w-full max-h-[min(50vh,320px)] object-cover" />
+          <span className="absolute inset-0 flex items-center justify-center bg-black/25 transition-colors group-hover:bg-black/40">
+            <span className="flex h-14 w-14 items-center justify-center rounded-full bg-white/90 shadow-lg transition-transform group-hover:scale-105">
+              {loading ? (
+                <Loader2 className="h-6 w-6 animate-spin text-black" />
+              ) : (
+                <Play className="ml-0.5 h-6 w-6 fill-black text-black" />
+              )}
+            </span>
+          </span>
+        </button>
       ) : (
         <Button
           variant="outline"

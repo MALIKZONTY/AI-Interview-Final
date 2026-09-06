@@ -12,8 +12,11 @@ Returns:
   face_detected_ratio  share of sampled frames containing a face
   eye_contact_score    0-100, iris-at-camera blended with head orientation
   presence_score       0-100, face reliably in frame and close enough to read
+  thumbnail            base64 JPEG poster frame, so results can show the answer
+                       without downloading several megabytes of video
 """
 
+import base64
 import logging
 import tempfile
 from pathlib import Path
@@ -67,6 +70,10 @@ def _analyse(path: Path) -> dict | None:
     faces = 0
     gaze_scores: list[float] = []
     face_areas: list[float] = []
+    # Poster frame: prefer the clearest look at the candidate's face.
+    best_frame = None
+    best_area = -1.0
+    first_frame = None
 
     try:
         for frame, w, h in _sample_frames(path):
@@ -78,6 +85,9 @@ def _analyse(path: Path) -> dict | None:
                 image_format=mp.ImageFormat.SRGB,
                 data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
             )
+            if first_frame is None:
+                first_frame = frame
+
             result = landmarker.detect_for_video(image, stamp_ms)
             if not result.face_landmarks:
                 continue
@@ -87,6 +97,9 @@ def _analyse(path: Path) -> dict | None:
             if metrics is not None:
                 gaze_scores.append(metrics.gaze_at_camera)
                 face_areas.append(metrics.face_area_ratio)
+                if metrics.face_area_ratio > best_area:
+                    best_area = metrics.face_area_ratio
+                    best_frame = frame
     finally:
         landmarker.close()
 
@@ -117,8 +130,27 @@ def _analyse(path: Path) -> dict | None:
         "presence_score": round(presence, 2),
         "face_area_ratio_avg": round(area_avg, 5),
         "frames_sampled": frames,
+        "thumbnail": _encode_thumbnail(best_frame if best_frame is not None else first_frame),
         "note": "MediaPipe Face Mesh with iris refinement",
     }
+
+
+def _encode_thumbnail(frame, max_width: int = 480) -> str | None:
+    """Base64 JPEG poster frame, downscaled — tens of KB rather than megabytes."""
+    if frame is None:
+        return None
+    try:
+        h, w = frame.shape[:2]
+        if w > max_width:
+            scale = max_width / float(w)
+            frame = cv2.resize(frame, (max_width, int(h * scale)), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 72])
+        if not ok:
+            return None
+        return base64.b64encode(buf.tobytes()).decode("ascii")
+    except Exception as e:
+        logger.warning("thumbnail encode failed: %s", e)
+        return None
 
 
 def _unavailable(reason: str) -> dict:
@@ -129,6 +161,7 @@ def _unavailable(reason: str) -> dict:
         "presence_score": None,
         "face_area_ratio_avg": 0.0,
         "frames_sampled": 0,
+        "thumbnail": None,
         "note": reason,
     }
 

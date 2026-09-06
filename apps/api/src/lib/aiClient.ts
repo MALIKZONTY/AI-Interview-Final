@@ -153,6 +153,8 @@ export type VideoMeta = {
   presence_score: number | null;
   face_area_ratio_avg?: number;
   frames_sampled?: number;
+  /** base64 JPEG poster frame */
+  thumbnail?: string | null;
   note?: string;
 };
 
