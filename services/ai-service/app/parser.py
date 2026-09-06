@@ -4,10 +4,27 @@ from typing import Any
 from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
 
-# Initialize OpenAI client. If user uses HuggingFace/Groq/etc., they can override base_url in env
+# The one LLM client for the whole service — question generation, follow-ups,
+# answer evaluation, summaries and cloud transcription all share it.
+#
+# The default matters. Left unset it was None, which sends requests to OpenAI, so a
+# Groq key came back "Incorrect API key provided" with a link to OpenAI's dashboard
+# — while transcription kept working, because speech.py happened to default to Groq.
+# Anything OpenAI-compatible can still be selected through OPENAI_BASE_URL.
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL") or "https://api.groq.com/openai/v1"
+
 client = AsyncOpenAI(
     api_key=os.getenv("OPENAI_API_KEY", "dummy-key-if-not-set-but-required"),
-    base_url=os.getenv("OPENAI_BASE_URL", None)
+    base_url=OPENAI_BASE_URL,
+)
+
+# Printed once at import so a misrouted key is visible in the logs rather than
+# only in a 401 from whichever provider received it.
+print(
+    f"[ai] LLM endpoint: {OPENAI_BASE_URL} | model: "
+    f"{os.getenv('OPENAI_MODEL', 'openai/gpt-oss-20b')} | "
+    f"key: {'set' if os.getenv('OPENAI_API_KEY') else 'MISSING'}",
+    flush=True,
 )
 
 class ParsedProfile(BaseModel):

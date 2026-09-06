@@ -18,18 +18,15 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, Form, UploadFile
-from openai import AsyncOpenAI
 
+from app.parser import client
 from app.voice import extract_metrics
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Client used for cloud-based STT (Groq Whisper)
-client = AsyncOpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_BASE_URL", "https://api.groq.com/openai/v1"),
-)
+# Shared with the rest of the service. Defining a second client here is what let
+# the two drift: this one defaulted to Groq, parser.py's defaulted to OpenAI.
 
 
 def _ffmpeg_bin() -> str:
