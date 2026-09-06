@@ -4,5 +4,5 @@
 # repository root only because that is where Hugging Face looks.
 -r services/ai-service/requirements.txt
 
-# Landing page for the Space. The API works without it — see space_app.py.
-gradio>=4.44.0
+# gradio is NOT listed here: Hugging Face pre-installs it and pins the version via
+# sdk_version in README.md. Declaring it again risks a conflicting resolve.
