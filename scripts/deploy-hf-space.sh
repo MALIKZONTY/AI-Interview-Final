@@ -2,11 +2,11 @@
 #
 # Publish the Python AI service to its Hugging Face Space.
 #
-# The Space cannot simply mirror this repository. Hugging Face rejects binary files
-# that are not in its LFS/Xet storage, and apps/web carries a GLB avatar and three
-# branding PNGs — none of which the Space has any use for, since it runs only the
-# Python service. So this assembles a clean tree containing just what the Space
-# needs (~350KB) and force-pushes that as a single commit.
+# The Space runs the Docker SDK, so it wants the service at the root of its own
+# repository — Dockerfile, requirements.txt and the app package — which is exactly
+# the shape of services/ai-service. Nothing else is sent: pushing the whole monorepo
+# fails anyway, since Hugging Face rejects the GLB avatar and branding PNGs under
+# apps/web unless they sit in its LFS storage, and the Space has no use for them.
 #
 # Usage:  bash scripts/deploy-hf-space.sh
 # Auth:   username is your HF account, password is a WRITE token from
@@ -23,65 +23,57 @@ if [[ -z "$SPACE_URL" ]]; then
   exit 1
 fi
 
-# Everything the Space reads. Paths are relative to the repo root and keep their
-# layout, because space_app.py imports from services/ai-service and the root
-# requirements.txt includes that directory's own list.
-FILES=(
-  README.md              # Space metadata: sdk, app_file, title
-  space_app.py           # entry point Hugging Face runs
-  requirements.txt       # python deps (pulls in the service's list)
-  packages.txt           # apt packages, i.e. ffmpeg
-)
-DIRS=(
-  services/ai-service/app
-)
-EXTRA_FILES=(
-  services/ai-service/requirements.txt
-)
-
-for f in "${FILES[@]}" "${EXTRA_FILES[@]}"; do
+SERVICE="services/ai-service"
+for f in "$SERVICE/Dockerfile" "$SERVICE/requirements.txt"; do
   [[ -f "$f" ]] || { echo "Missing required file: $f" >&2; exit 1; }
 done
-
-# The root list is a deliberate subset of the service's, not an include of it —
-# Hugging Face installs it in a stage where the service directory does not exist.
-# Every line it does carry must still match, so a version bump made in one place
-# cannot silently ship a different one to the Space.
-strip_comments() { grep -vE '^\s*(#|$)' "$1" | sed 's/[[:space:]]*$//' | sort; }
-EXTRA="$(comm -13 <(strip_comments services/ai-service/requirements.txt) \
-                  <(strip_comments requirements.txt))"
-if [[ -n "$EXTRA" ]]; then
-  echo "requirements.txt has entries the service list does not:" >&2
-  echo "$EXTRA" >&2
-  exit 1
-fi
-OMITTED="$(comm -23 <(strip_comments services/ai-service/requirements.txt) \
-                    <(strip_comments requirements.txt))"
-if [[ -n "$OMITTED" ]]; then
-  echo "Space build omits (intentional, keeps the image small):"
-  echo "$OMITTED" | sed 's/^/  - /'
-  echo
-fi
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
-for f in "${FILES[@]}" "${EXTRA_FILES[@]}"; do
-  mkdir -p "$STAGE/$(dirname "$f")"
-  cp "$f" "$STAGE/$f"
-done
-for d in "${DIRS[@]}"; do
-  mkdir -p "$STAGE/$(dirname "$d")"
-  # Caches, macOS cruft and local model bundles must not travel; the Space rebuilds them.
-  rsync -a --exclude '__pycache__' --exclude '*.pyc' --exclude '.DS_Store' \
-        --exclude '.models' --exclude '.env' "$d/" "$STAGE/$d/"
-done
+cp "$SERVICE/Dockerfile" "$STAGE/Dockerfile"
+cp "$SERVICE/requirements.txt" "$STAGE/requirements.txt"
+# Caches, macOS cruft and local model bundles must not travel; the image rebuilds them.
+rsync -a --exclude '__pycache__' --exclude '*.pyc' --exclude '.DS_Store' \
+      --exclude '.models' --exclude '.env' "$SERVICE/app/" "$STAGE/app/"
 
-# Guard the exact thing that broke the first attempt.
+# The Space needs its own card: Hugging Face reads the SDK and port from this front
+# matter, while the repository README describes the whole project.
+cat > "$STAGE/README.md" <<'CARD'
+---
+title: Interview AI Service
+emoji: 🎤
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
+# Interview AI Service
+
+Backend for the AI Interview app. Serves an HTTP API rather than a user interface.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /generate-questions` | interview questions from a topic or a resume |
+| `POST /generate-followup` | decides whether to probe the previous answer |
+| `POST /speech-to-text` | transcript plus vocal delivery metrics |
+| `POST /analyze-video` | eye contact and on-camera presence |
+| `POST /evaluate-answer` | correctness and confidence scores |
+| `POST /speak` | the interviewer's voice |
+| `GET /health` | liveness |
+
+Whisper, MediaPipe and Piper weights download on first use.
+
+Setting `AI_SERVICE_TOKEN` requires an `x-service-token` header on every endpoint
+except `/health`; leaving it unset accepts unauthenticated calls.
+CARD
+
+# Guard the thing that broke the first attempt at this.
 if find "$STAGE" -type f \( -name '*.glb' -o -name '*.png' -o -name '*.jpg' \
      -o -name '*.onnx' -o -name '*.task' -o -name '*.bin' \) | grep -q .; then
   echo "Refusing to push: binary files ended up in the staged tree." >&2
-  find "$STAGE" -type f \( -name '*.glb' -o -name '*.png' -o -name '*.onnx' \) >&2
   exit 1
 fi
 
@@ -93,12 +85,9 @@ git add -A
 git -c user.email=deploy@local -c user.name=deploy commit -q \
   -m "Deploy AI service from $(cd "$REPO_ROOT" && git rev-parse --short HEAD)"
 
-# Never echo the URL itself: it may carry a token when passed via SPACE_URL.
 SAFE_URL="$(printf '%s' "$SPACE_URL" | sed -E 's#//[^@/]+@#//#')"
 echo
 echo "Pushing to $SAFE_URL"
-echo "  username: your Hugging Face account name"
-echo "  password: a WRITE token, not your account password"
 echo
 git push --force "$SPACE_URL" main
 echo
