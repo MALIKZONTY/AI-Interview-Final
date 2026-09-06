@@ -43,6 +43,18 @@ for f in "${FILES[@]}" "${EXTRA_FILES[@]}"; do
   [[ -f "$f" ]] || { echo "Missing required file: $f" >&2; exit 1; }
 done
 
+# The root list is a copy of the service's, not an include of it — Hugging Face
+# installs it in a stage where the service directory does not exist. Copies drift,
+# so refuse to deploy when the two disagree on actual requirement lines.
+strip_comments() { grep -vE '^\s*(#|$)' "$1" | sed 's/[[:space:]]*$//' | sort; }
+if ! diff -q <(strip_comments requirements.txt) \
+             <(strip_comments services/ai-service/requirements.txt) >/dev/null; then
+  echo "requirements.txt and services/ai-service/requirements.txt have diverged:" >&2
+  diff <(strip_comments services/ai-service/requirements.txt) \
+       <(strip_comments requirements.txt) >&2 || true
+  exit 1
+fi
+
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
