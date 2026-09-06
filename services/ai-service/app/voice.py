@@ -27,6 +27,11 @@ import numpy as np
 # measurement cannot swing the result to either extreme on its own.
 NEUTRAL_CONFIDENCE = 60.0
 
+# Weight of the facial-expression component, and the total of the five vocal ones.
+# Kept named so the coverage check below cannot drift out of step with the table.
+EXPRESSION_WEIGHT = 0.14
+VOICE_WEIGHT_TOTAL = 1.00
+
 # Gap between Whisper segments that counts as a deliberate pause.
 PAUSE_GAP_SECONDS = 0.35
 LONG_PAUSE_SECONDS = 1.2
@@ -264,10 +269,11 @@ def confidence_from_voice(
 
     expressiveness = face_num("expressiveness")
     composure = face_num("composure")
-    if expressiveness is not None or composure is not None:
+    has_face = expressiveness is not None or composure is not None
+    if has_face:
         parts = [v for v in (expressiveness, composure) if v is not None]
         components["expression"] = float(np.mean(parts))
-        weights["expression"] = 0.14
+        weights["expression"] = EXPRESSION_WEIGHT
 
     total_weight = sum(weights.values())
     if total_weight <= 0:
@@ -277,8 +283,13 @@ def confidence_from_voice(
 
     # With only part of the signal set available (e.g. the wav could not be decoded)
     # pull toward neutral rather than trusting one component to carry the whole score.
-    if total_weight < 1.0:
-        score = score * total_weight + NEUTRAL_CONFIDENCE * (1.0 - total_weight)
+    # Coverage is measured against what this answer could have scored on: an on-camera
+    # answer has the expression component available, an audio-only one does not, so a
+    # fixed denominator would misjudge one of the two.
+    achievable = VOICE_WEIGHT_TOTAL + (EXPRESSION_WEIGHT if has_face else 0.0)
+    coverage = total_weight / achievable
+    if coverage < 1.0:
+        score = score * coverage + NEUTRAL_CONFIDENCE * (1.0 - coverage)
 
     # Hesitating a long time before starting reads as uncertainty.
     lead_in = num("lead_in_seconds") or 0.0
