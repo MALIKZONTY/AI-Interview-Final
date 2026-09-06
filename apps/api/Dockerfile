@@ -1,4 +1,7 @@
-FROM node:20-bookworm-slim AS base
+# Node 22: @supabase/supabase-js needs a native global WebSocket, which Node 20
+# does not provide, and its client constructor builds a realtime client eagerly
+# even though only storage is used here.
+FROM node:22-bookworm-slim AS base
 WORKDIR /app
 
 # Prisma needs an OpenSSL runtime to pick its query engine. Bookworm ships
