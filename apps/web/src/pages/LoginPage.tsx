@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export function LoginPage() {
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,9 +29,9 @@ export function LoginPage() {
     setError(null);
     setLoading(true);
     try {
-      const { data } = await api.post<{ token: string; user: { id: string; name: string; email: string } }>(
+      const { data } = await api.post<{ token: string; user: { id: string; name: string; username: string } }>(
         "/auth/login",
-        { email, password }
+        { username, password }
       );
       setAuth(data.token, data.user);
       navigate(from, { replace: true });
@@ -77,9 +77,9 @@ export function LoginPage() {
         <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-12 relative z-10 w-full max-w-lg mx-auto">
           <div className="w-full space-y-10 sm:space-y-12 animate-slide-up py-8">
             <div className="space-y-4 text-center lg:text-left">
-              <h2 className="text-4xl sm:text-5xl font-display font-black tracking-tighter leading-none text-foreground italic">Elevate your practice.</h2>
+              <h2 className="text-4xl sm:text-5xl font-display font-black tracking-tighter leading-none text-foreground italic">Welcome back.</h2>
               <p className="text-muted-foreground text-sm font-medium leading-relaxed">
-                Experience the world's most advanced AI interview simulator. Join the next generation of professional talent.
+                Sign in to continue practising.
               </p>
             </div>
 
@@ -87,21 +87,21 @@ export function LoginPage() {
               <form onSubmit={onSubmit} className="space-y-8">
                 <div className="space-y-6">
                   <div className="space-y-2">
-                    <Label htmlFor="email" className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground ml-1">Email Identity</Label>
+                    <Label htmlFor="username" className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground ml-1">Username</Label>
                     <Input
-                      id="email"
-                      type="email"
-                      autoComplete="email"
+                      id="username"
+                      type="text"
+                      autoComplete="username"
                       required
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="email@example.com"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      placeholder="your username"
                       className="h-14 rounded-2xl bg-card border-border focus:border-primary/40 focus:ring-4 focus:ring-primary/5 transition-all font-medium text-foreground shadow-sm"
                     />
                   </div>
                   <div className="space-y-2 relative">
                     <div className="flex justify-between items-center ml-1">
-                      <Label htmlFor="password" className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground">Credentials</Label>
+                      <Label htmlFor="password" className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground">Password</Label>
                     </div>
                     <Input
                       id="password"
@@ -127,7 +127,7 @@ export function LoginPage() {
 
                 {error && (
                   <div className="p-4 rounded-2xl bg-destructive/5 border border-destructive/20 text-[10px] font-black text-destructive text-center animate-shake backdrop-blur-md uppercase tracking-widest">
-                    AUTHENTICATION FAILED: {error}
+                    {error}
                   </div>
                 )}
 
@@ -135,11 +135,11 @@ export function LoginPage() {
                   {loading ? (
                     <div className="flex items-center gap-3">
                       <Loader2 className="h-5 w-5 animate-spin" />
-                      <span className="tracking-[0.3em] uppercase">Authenticating Stage...</span>
+                      <span className="tracking-[0.2em] uppercase">Signing in...</span>
                     </div>
                   ) : (
                     <div className="flex items-center gap-2">
-                      <span className="tracking-[0.3em] ml-2">ACCESS PLATFORM</span>
+                      <span className="tracking-[0.2em] ml-2">SIGN IN</span>
                       <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
                     </div>
                   )}
@@ -149,16 +149,16 @@ export function LoginPage() {
               <div className="relative py-2">
                 <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-[1px] bg-border"></div>
                 <div className="relative z-10 flex justify-center">
-                  <span className="bg-background px-6 text-[10px] font-black text-muted-foreground/40 uppercase tracking-[0.5em] italic">System Split</span>
+                  <span className="bg-background px-6 text-[10px] font-black text-muted-foreground/40 uppercase tracking-[0.3em]">or</span>
                 </div>
               </div>
 
               <div className="text-center space-y-6">
                 <div className="space-y-4">
-                  <p className="text-xs font-semibold text-muted-foreground italic">New to the platform?</p>
+                  <p className="text-xs font-semibold text-muted-foreground">Don't have an account?</p>
                   <Button variant="outline" className="w-full h-14 rounded-2xl border-primary/20 bg-background hover:bg-primary/5 hover:border-primary/40 font-black text-primary text-[10px] uppercase tracking-[0.2em] group shadow-sm transition-all shadow-none" asChild>
                     <Link to="/signup">
-                      REQUEST ACCESS CREDENTIALS
+                      CREATE AN ACCOUNT
                       <Sparkles className="h-3 w-3 ml-2 group-hover:rotate-12 transition-transform" />
                     </Link>
                   </Button>

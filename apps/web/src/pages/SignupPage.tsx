@@ -10,7 +10,7 @@ import { AuthShowcase } from "@/components/AuthShowcase";
 
 export function SignupPage() {
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
@@ -41,8 +41,8 @@ export function SignupPage() {
     try {
       const { data } = await api.post<{
         token: string;
-        user: { id: string; name: string; email: string };
-      }>("/auth/register", { name, email, password, confirmPassword });
+        user: { id: string; name: string; username: string };
+      }>("/auth/register", { name, username, password, confirmPassword });
       setAuth(data.token, data.user);
       navigate("/", { replace: true });
     } catch (err: unknown) {
@@ -81,9 +81,9 @@ export function SignupPage() {
         <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-12 relative z-10 w-full max-w-lg mx-auto">
           <div className="w-full space-y-10 animate-slide-up py-8">
             <div className="space-y-4 text-center lg:text-left">
-              <h2 className="text-4xl sm:text-5xl font-display font-black tracking-tighter leading-none text-foreground italic">Initialize account.</h2>
+              <h2 className="text-4xl sm:text-5xl font-display font-black tracking-tighter leading-none text-foreground italic">Create your account.</h2>
               <p className="text-muted-foreground text-sm font-medium leading-relaxed">
-                Start your journey towards professional mastery.
+                It only takes a moment.
               </p>
             </div>
 
@@ -91,27 +91,29 @@ export function SignupPage() {
               <form onSubmit={onSubmit} className="space-y-8">
                 <div className="space-y-6">
                   <div className="space-y-2">
-                    <Label htmlFor="name" className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground ml-1">Identity Name</Label>
+                    <Label htmlFor="name" className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground ml-1">Name</Label>
                     <Input
                       id="name"
                       autoComplete="name"
                       required
                       value={name}
                       onChange={(e) => setName(e.target.value)}
-                      placeholder="e.g. Malik Zonty"
+                      placeholder="your name"
                       className="h-14 rounded-2xl bg-card border-border focus:border-primary/40 focus:ring-4 focus:ring-primary/5 transition-all font-medium text-foreground shadow-sm"
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="email" className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground ml-1">Email Connection</Label>
+                    <Label htmlFor="username" className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground ml-1">Username</Label>
                     <Input
-                      id="email"
-                      type="email"
-                      autoComplete="email"
+                      id="username"
+                      type="text"
+                      autoComplete="username"
                       required
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="email@example.com"
+                      minLength={3}
+                      maxLength={32}
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      placeholder="pick a username"
                       className="h-14 rounded-2xl bg-card border-border focus:border-primary/40 focus:ring-4 focus:ring-primary/5 transition-all font-medium text-foreground shadow-sm"
                     />
                   </div>
@@ -139,7 +141,7 @@ export function SignupPage() {
                       </button>
                     </div>
                     <div className="space-y-2 relative">
-                      <Label htmlFor="confirm" className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground ml-1">Confirm</Label>
+                      <Label htmlFor="confirm" className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground ml-1">Confirm password</Label>
                       <Input
                         id="confirm"
                         type={showConfirm ? "text" : "password"}
@@ -165,7 +167,7 @@ export function SignupPage() {
 
                 {error && (
                   <div className="p-4 rounded-2xl bg-destructive/5 border border-destructive/20 text-[10px] font-black text-destructive text-center animate-shake backdrop-blur-md uppercase tracking-widest">
-                    INITIALIZATION FAILED: {error}
+                    {error}
                   </div>
                 )}
 
@@ -173,11 +175,11 @@ export function SignupPage() {
                   {loading ? (
                     <div className="flex items-center gap-3">
                       <Loader2 className="h-5 w-5 animate-spin" />
-                      <span className="tracking-[0.3em] uppercase">Constructing Identity...</span>
+                      <span className="tracking-[0.2em] uppercase">Creating account...</span>
                     </div>
                   ) : (
                     <div className="flex items-center gap-2">
-                      <span className="tracking-[0.3em] ml-2 uppercase">INITIALIZE ACCOUNT</span>
+                      <span className="tracking-[0.2em] ml-2 uppercase">CREATE ACCOUNT</span>
                       <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
                     </div>
                   )}
@@ -187,15 +189,15 @@ export function SignupPage() {
               <div className="relative py-2">
                 <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-[1px] bg-border"></div>
                 <div className="relative z-10 flex justify-center">
-                  <span className="bg-background px-6 text-[10px] font-black text-muted-foreground/40 uppercase tracking-[0.5em] italic">System Checkpoint</span>
+                  <span className="bg-background px-6 text-[10px] font-black text-muted-foreground/40 uppercase tracking-[0.3em]">or</span>
                 </div>
               </div>
 
               <div className="text-center">
-                <p className="text-sm font-semibold text-muted-foreground italic mb-4">Already have an active profile?</p>
+                <p className="text-sm font-semibold text-muted-foreground mb-4">Already have an account?</p>
                 <Button variant="outline" className="w-full h-14 rounded-2xl border-primary/20 bg-background hover:bg-primary/5 hover:border-primary/40 font-black text-primary text-[10px] uppercase tracking-[0.2em] group shadow-sm transition-all shadow-none" asChild>
                   <Link to="/login">
-                    LOGIN TO EVOLVE
+                    SIGN IN
                     <Sparkles className="h-3 w-3 ml-2 group-hover:rotate-12 transition-transform" />
                   </Link>
                 </Button>

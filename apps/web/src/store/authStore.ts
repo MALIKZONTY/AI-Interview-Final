@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type User = { id: string; name: string; email: string };
+export type User = { id: string; name: string; username: string };
 
 type AuthState = {
   token: string | null;

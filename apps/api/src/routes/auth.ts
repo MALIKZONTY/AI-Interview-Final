@@ -3,15 +3,26 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 
+/**
+ * Usernames rather than email addresses: nothing here sends mail, so an address
+ * was a field to mistype rather than a way to reach anyone. Accounts created
+ * before this keep working — their address became their username.
+ */
+const USERNAME = z
+  .string()
+  .trim()
+  .min(3, "Username must be at least 3 characters")
+  .max(32, "Username must be 32 characters or fewer");
+
 const registerSchema = z.object({
-  name: z.string().min(1),
-  email: z.string().email(),
+  name: z.string().trim().min(1),
+  username: USERNAME,
   password: z.string().min(8),
   confirmPassword: z.string().min(8),
 });
 
 const loginSchema = z.object({
-  email: z.string().email(),
+  username: z.string().trim().min(1),
   password: z.string().min(1),
 });
 
@@ -25,18 +36,18 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) {
       return reply.status(400).send({ error: "Invalid body", details: parsed.error.flatten() });
     }
-    const { name, email, password, confirmPassword } = parsed.data;
+    const { name, username, password, confirmPassword } = parsed.data;
     if (password !== confirmPassword) {
       return reply.status(400).send({ error: "Passwords do not match" });
     }
-    const existing = await prisma.user.findUnique({ where: { email } });
+    const existing = await prisma.user.findUnique({ where: { username } });
     if (existing) {
-      return reply.status(409).send({ error: "Email already registered" });
+      return reply.status(409).send({ error: "That username is taken" });
     }
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await prisma.user.create({
-      data: { name, email, passwordHash },
-      select: { id: true, name: true, email: true },
+      data: { name, username, passwordHash },
+      select: { id: true, name: true, username: true },
     });
     const token = app.jwt.sign({ sub: user.id });
     return reply.send({ user, token });
@@ -47,18 +58,18 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) {
       return reply.status(400).send({ error: "Invalid credentials" });
     }
-    const { email, password } = parsed.data;
-    const user = await prisma.user.findUnique({ where: { email } });
+    const { username, password } = parsed.data;
+    const user = await prisma.user.findUnique({ where: { username } });
     if (!user) {
-      return reply.status(401).send({ error: "Invalid email or password" });
+      return reply.status(401).send({ error: "Incorrect username or password" });
     }
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) {
-      return reply.status(401).send({ error: "Invalid email or password" });
+      return reply.status(401).send({ error: "Incorrect username or password" });
     }
     const token = app.jwt.sign({ sub: user.id });
     return reply.send({
-      user: { id: user.id, name: user.name, email: user.email },
+      user: { id: user.id, name: user.name, username: user.username },
       token,
     });
   });
