@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
-import { ArrowRight, BarChart4, Brain, Command, Eye, EyeOff, Loader2, Sparkles, UploadCloud, Video } from "lucide-react";
+import { ArrowRight, Command, Eye, EyeOff, Loader2, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
+import { AuthShowcase } from "@/components/AuthShowcase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -44,90 +45,9 @@ export function LoginPage() {
     }
   }
 
-  const lifecycle = [
-    { 
-        icon: UploadCloud, 
-        title: "Upload Your Profile", 
-        desc: "Give it a topic, or upload your resume. The AI reads whichever you choose and builds the questions from it.",
-        color: "text-blue-400"
-    },
-    { 
-        icon: Brain, 
-        title: "Think & Prepare", 
-        desc: "See your questions ahead of time. You get 10 seconds to plan each answer so you stay calm and focused.",
-        color: "text-indigo-400"
-    },
-    { 
-        icon: Video, 
-        title: "Practice with AI", 
-        desc: "Talk to an AI interviewer that listens. It tracks your confidence and skills in a real-time simulation.",
-        color: "text-violet-400"
-    },
-    { 
-        icon: BarChart4, 
-        title: "Get Expert Feedback", 
-        desc: "Receive a full report on your technical accuracy, confidence just minutes after finishing.",
-        color: "text-fuchsia-400"
-    }
-  ];
-
   return (
     <div className="min-h-screen flex flex-col lg:grid lg:grid-cols-12 bg-background overflow-x-hidden font-sans">
-      {/* Left Side: Cinematic Marketing Block (Remains Dark/Atmospheric) */}
-      <div className="relative hidden lg:flex lg:col-span-7 flex-col justify-between p-16 bg-gradient-to-br from-slate-950 via-black to-slate-900 overflow-hidden border-r border-white/5">
-        <div className="absolute top-0 left-0 w-full h-full opacity-30 pointer-events-none">
-          <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-indigo-500 rounded-full blur-[140px] animate-pulse"></div>
-          <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-violet-500 rounded-full blur-[120px] animate-pulse [animation-delay:2s]"></div>
-        </div>
-        
-        <div className="relative z-10 flex items-center gap-3">
-          <div className="w-11 h-11 bg-white rounded-2xl flex items-center justify-center shadow-xl shadow-white/10 ring-1 ring-white/20">
-            <Command className="text-indigo-600 h-6 w-6" />
-          </div>
-          <div className="flex flex-col">
-            <div className="flex items-center gap-2">
-              <span className="text-2xl font-display font-black tracking-tighter text-white leading-none uppercase italic">EVOLVE</span>
-              <span className="text-[10px] font-bold text-white/40 uppercase tracking-[0.2em] mt-0.5"> AI Interview System</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="relative z-10 max-w-xl self-center w-full space-y-12">
-          <div className="space-y-4">
-            <h1 className="text-5xl font-display font-black text-white leading-none tracking-tighter italic">
-              Experience the <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-300 to-violet-200">future of talent.</span>
-            </h1>
-            <div className="w-20 h-1 bg-white/20 rounded-full"></div>
-          </div>
-
-          <div className="space-y-10 text-white">
-            {lifecycle.map((step, i) => (
-              <div key={i} className="flex gap-8 group transition-all duration-500 hover:translate-x-2">
-                <div className="relative flex flex-col items-center">
-                  <div className={`w-14 h-14 rounded-2xl bg-white/5 border border-white/10 shadow-lg flex items-center justify-center relative z-10 transition-transform group-hover:scale-110 group-hover:bg-white group-hover:border-white shadow-indigo-500/10`}>
-                    <step.icon className={`h-6 w-6 ${step.color} group-hover:text-indigo-600 transition-colors`} />
-                  </div>
-                  {i < lifecycle.length - 1 && (
-                    <div className="w-0.5 h-full bg-gradient-to-b from-white/20 to-transparent absolute top-14"></div>
-                  )}
-                </div>
-                <div className="space-y-1 py-1">
-                  <h3 className="text-lg font-black tracking-tight uppercase italic">{step.title}</h3>
-                  <p className="opacity-50 text-sm leading-relaxed font-medium line-clamp-2 group-hover:line-clamp-none transition-all duration-500">{step.desc}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="relative z-10 flex items-center justify-between border-t border-white/5 pt-8">
-          <div className="flex flex-col gap-1">
-            <h2 className="text-xl md:text-2xl font-display font-black tracking-tighter text-indigo-200 italic">
-              Master the Stage. <span className="text-white/40">Own your Career.</span>
-            </h2>
-          </div>
-        </div>
-      </div>
+      <AuthShowcase />
 
       {/* Right Side: Interaction Stage (Theme Adaptive) */}
       <div className="lg:col-span-5 flex-1 flex flex-col relative bg-background overflow-hidden relative">

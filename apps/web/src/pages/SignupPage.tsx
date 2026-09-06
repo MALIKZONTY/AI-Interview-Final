@@ -1,33 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import {
-  Sparkles, Command, Eye, EyeOff,
-  ArrowRight, CheckCircle2, Loader2
-} from "lucide-react";
+import { ArrowRight, Command, Eye, EyeOff, Loader2, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-
-// High-Fidelity Assets Generated for the Carousel
-const CAROUSEL_IMAGES = [
-  {
-    url: "/branding/stage-1.png",
-    slogan: "Master the Stage.",
-    desc: "Practice interviews in a real-time AI simulation."
-  },
-  {
-    url: "/branding/stage-2.png",
-    slogan: "Accelerate Growth.",
-    desc: "Unlock your professional blueprint."
-  },
-  {
-    url: "/branding/stage-3.png",
-    slogan: "Precision Feedback.",
-    desc: "Get deep-scan insights in minutes."
-  }
-];
+import { AuthShowcase } from "@/components/AuthShowcase";
 
 export function SignupPage() {
   const [name, setName] = useState("");
@@ -38,19 +17,10 @@ export function SignupPage() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeIndex, setActiveIndex] = useState(0);
 
   const token = useAuthStore((s) => s.token);
   const setAuth = useAuthStore((s) => s.setAuth);
   const navigate = useNavigate();
-
-  // Carousel Logic: Rotate every 5 seconds
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setActiveIndex((prev) => (prev + 1) % CAROUSEL_IMAGES.length);
-    }, 5000);
-    return () => clearInterval(interval);
-  }, []);
 
   useEffect(() => {
     if (token) navigate("/", { replace: true });
@@ -85,61 +55,7 @@ export function SignupPage() {
 
   return (
     <div className="min-h-screen flex flex-col lg:grid lg:grid-cols-12 bg-background overflow-x-hidden font-sans">
-      {/* Left Side: Cinematic Image Carousel (Desktop Only, Remains Branding Focus) */}
-      <div className="relative hidden lg:flex lg:col-span-7 flex-col justify-between overflow-hidden bg-black border-r border-white/5">
-        {/* The Carousel Images */}
-        {CAROUSEL_IMAGES.map((img, i) => (
-          <div
-            key={i}
-            className={`absolute inset-0 transition-opacity duration-1000 ease-in-out ${i === activeIndex ? 'opacity-50' : 'opacity-0'}`}
-          >
-            <img
-              src={img.url}
-              alt={img.slogan}
-              className="w-full h-full object-cover scale-105"
-            />
-          </div>
-        ))}
-
-        {/* Branding & Overlay */}
-        <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent"></div>
-
-        <div className="relative z-10 p-16 flex flex-col justify-between h-full">
-          {/* Logo */}
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 bg-white rounded-2xl flex items-center justify-center shadow-xl shadow-white/10 ring-1 ring-white/20">
-              <Command className="text-primary h-6 w-6" />
-            </div>
-            <div className="flex flex-col">
-              <div className="flex items-center gap-2">
-                <span className="text-2xl font-display font-black tracking-tighter text-white leading-none uppercase italic">EVOLVE</span>
-                <span className="text-[10px] font-bold text-white/40 uppercase tracking-[0.2em] mt-0.5"> AI Interview System</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Slogan Overlay */}
-          <div className="max-w-xl space-y-6">
-            <div className="flex gap-2">
-              {CAROUSEL_IMAGES.map((_, i) => (
-                <div
-                  key={i}
-                  className={`h-1 rounded-full transition-all duration-500 ${i === activeIndex ? 'w-12 bg-primary' : 'w-4 bg-white/20'}`}
-                />
-              ))}
-            </div>
-            <div className="space-y-4 animate-slide-up" key={activeIndex}>
-              <h1 className="text-7xl font-display font-black text-white leading-none tracking-tighter italic">
-                {CAROUSEL_IMAGES[activeIndex].slogan}
-              </h1>
-              <p className="text-white/60 text-lg font-medium max-w-md italic">
-                {CAROUSEL_IMAGES[activeIndex].desc}
-              </p>
-            </div>
-          </div>
-
-        </div>
-      </div>
+      <AuthShowcase />
 
       {/* Right Side: Interaction Stage (Theme Adaptive) */}
       <div className="lg:col-span-5 flex-1 flex flex-col relative bg-background overflow-hidden relative">
