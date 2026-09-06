@@ -10,8 +10,10 @@ defend to a candidate, and are not measured any more.
 
 Returns:
   face_detected_ratio  share of sampled frames containing a face
-  eye_contact_score    0-100, iris-at-camera blended with head orientation
+  eye_contact_score    0-100, iris-at-camera gated by head orientation
   presence_score       0-100, face reliably in frame and close enough to read
+  expressiveness       0-100, how animated the face is across the answer
+  composure            0-100, absence of visible tension (furrowed brow, pressed lips)
   thumbnail            base64 JPEG poster frame, so results can show the answer
                        without downloading several megabytes of video
 """
@@ -34,6 +36,54 @@ router = APIRouter()
 # Sampling: ~3 frames a second, capped, so a 30s clip stays well under a second of CPU.
 TARGET_FPS = 3
 MAX_FRAMES = 60
+
+
+# Blendshapes that move when someone is talking and engaged, rather than sitting frozen.
+# Names follow MediaPipe Tasks ("browDownLeft"), not the ARKit/GLB "_L" convention
+# the avatar model uses — mixing them silently yields zero for every lookup.
+_ANIMATION_SHAPES = (
+    "jawOpen", "mouthSmileLeft", "mouthSmileRight", "browInnerUp",
+    "browOuterUpLeft", "browOuterUpRight", "cheekSquintLeft", "cheekSquintRight",
+)
+# Blendshapes that read as strain: furrowed brow, pressed lips, squinting.
+_TENSION_SHAPES = (
+    "browDownLeft", "browDownRight", "mouthPressLeft", "mouthPressRight",
+    "eyeSquintLeft", "eyeSquintRight", "mouthFrownLeft", "mouthFrownRight",
+)
+
+
+def _animation_of(shapes: dict[str, float]) -> float:
+    return float(np.mean([shapes.get(k, 0.0) for k in _ANIMATION_SHAPES]))
+
+
+def _tension_of(shapes: dict[str, float]) -> float:
+    return float(np.mean([shapes.get(k, 0.0) for k in _TENSION_SHAPES]))
+
+
+def _expression_scores(animation: list[float], tension: list[float]) -> dict[str, float | None]:
+    """
+    Expressiveness rewards a face that moves while speaking; a frozen face and a
+    wildly mobile one both read as uncomfortable, so the good range is a band.
+    Composure is simply the absence of visible strain.
+    """
+    if len(animation) < 3:
+        return {"expressiveness": None, "composure": None}
+
+    movement = float(np.std(animation)) + 0.5 * float(np.mean(animation))
+    # Measured on real answers, ordinary speech lands around 0.06-0.17, so the plateau
+    # starts near the bottom of that. This is a detector for a frozen or agitated face,
+    # not a ranking of how animated two normal speakers are.
+    if movement <= 0.01:
+        expressiveness = 0.0
+    elif movement < 0.09:
+        expressiveness = 100.0 * (movement - 0.01) / 0.08
+    elif movement <= 0.30:
+        expressiveness = 100.0
+    else:
+        expressiveness = max(0.0, 100.0 * (1.0 - (movement - 0.30) / 0.35))
+
+    composure = float(np.clip(100.0 - float(np.mean(tension)) * 260.0, 0.0, 100.0))
+    return {"expressiveness": round(expressiveness, 2), "composure": round(composure, 2)}
 
 
 def _sample_frames(path: Path):
@@ -74,6 +124,9 @@ def _analyse(path: Path) -> dict | None:
     best_frame = None
     best_area = -1.0
     first_frame = None
+    # Per-frame blendshape samples for the expression metrics.
+    animation_samples: list[float] = []
+    tension_samples: list[float] = []
 
     try:
         for frame, w, h in _sample_frames(path):
@@ -93,6 +146,10 @@ def _analyse(path: Path) -> dict | None:
                 continue
 
             faces += 1
+            if result.face_blendshapes:
+                shapes = {c.category_name: c.score for c in result.face_blendshapes[0]}
+                animation_samples.append(_animation_of(shapes))
+                tension_samples.append(_tension_of(shapes))
             metrics = iris_gaze_score_from_landmarks(result.face_landmarks[0], w, h)
             if metrics is not None:
                 gaze_scores.append(metrics.gaze_at_camera)
@@ -115,9 +172,11 @@ def _analyse(path: Path) -> dict | None:
 
     if gaze_scores:
         gaze_mean = float(np.mean(gaze_scores))
-        # Looking away intermittently should not read the same as steady contact.
+        # Steadiness modulates, it never adds. Added as a term it paid out for looking
+        # away *consistently* — low variance on a low score — which put a floor of
+        # roughly a dozen points under someone who never met the lens at all.
         steadiness = float(np.clip(100.0 - np.std(gaze_scores) * 1.6, 0.0, 100.0))
-        eye_contact = 0.78 * gaze_mean + 0.22 * steadiness
+        eye_contact = gaze_mean * (0.80 + 0.20 * steadiness / 100.0)
         # A face missing from much of the clip caps how high eye contact can score.
         eye_contact *= 0.35 + 0.65 * face_ratio
         eye_contact = float(np.clip(eye_contact, 0.0, 100.0))
@@ -128,6 +187,7 @@ def _analyse(path: Path) -> dict | None:
         "face_detected_ratio": round(face_ratio, 4),
         "eye_contact_score": round(eye_contact, 2),
         "presence_score": round(presence, 2),
+        **_expression_scores(animation_samples, tension_samples),
         "face_area_ratio_avg": round(area_avg, 5),
         "frames_sampled": frames,
         "thumbnail": _encode_thumbnail(best_frame if best_frame is not None else first_frame),
@@ -160,6 +220,8 @@ def _unavailable(reason: str) -> dict:
         "eye_contact_score": None,
         "presence_score": None,
         "face_area_ratio_avg": 0.0,
+        "expressiveness": None,
+        "composure": None,
         "frames_sampled": 0,
         "thumbnail": None,
         "note": reason,

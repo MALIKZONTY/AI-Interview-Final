@@ -12,6 +12,8 @@ Signals used:
   steadiness  how much vocal energy varies (monotone vs erratic)
   projection  overall loudness relative to the noise floor
   flow        share of the answer window actually spent speaking
+  expression  facial animation and absence of visible tension, when a camera clip
+              exists; omitted entirely for audio-only answers
 """
 
 import re
@@ -185,12 +187,20 @@ def extract_metrics(
     }
 
 
-def confidence_from_voice(vm: dict[str, Any] | None) -> tuple[float, dict[str, Any], str]:
+def confidence_from_voice(
+    vm: dict[str, Any] | None,
+    face: dict[str, Any] | None = None,
+) -> tuple[float, dict[str, Any], str]:
     """
     Returns (confidence 0-100, per-component breakdown, short natural-language notes
     handed to the LLM so its feedback can talk about delivery).
+
+    `face` carries the facial-expression metrics from analyze-video when the answer
+    was recorded on camera. It is optional: audio-only answers simply score without
+    that component, and the weighting below renormalises.
     """
     vm = vm or {}
+    face = face or {}
 
     def num(key: str) -> float | None:
         v = vm.get(key)
@@ -241,6 +251,24 @@ def confidence_from_voice(vm: dict[str, Any] | None) -> tuple[float, dict[str, A
         components["flow"] = float(np.clip(speaking_ratio * 145.0, 0.0, 100.0))
         weights["flow"] = 0.18
 
+    # Expression — an engaged, unstrained face. Only present for camera answers, and
+    # weighted modestly: how someone sounds still carries the score.
+    def face_num(key: str) -> float | None:
+        v = face.get(key)
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    expressiveness = face_num("expressiveness")
+    composure = face_num("composure")
+    if expressiveness is not None or composure is not None:
+        parts = [v for v in (expressiveness, composure) if v is not None]
+        components["expression"] = float(np.mean(parts))
+        weights["expression"] = 0.14
+
     total_weight = sum(weights.values())
     if total_weight <= 0:
         return NEUTRAL_CONFIDENCE, {"reason": "insufficient_voice_metrics"}, ""
@@ -279,6 +307,10 @@ def confidence_from_voice(vm: dict[str, Any] | None) -> tuple[float, dict[str, A
         notes.append("Tone stayed fairly flat.")
     if energy_mean is not None and energy_mean < 0.030:
         notes.append("Voice was quiet throughout.")
+    if expressiveness is not None and expressiveness < 35:
+        notes.append("Face stayed fairly still while speaking.")
+    if composure is not None and composure < 45:
+        notes.append("Looked visibly tense.")
     if speaking_ratio is not None and speaking_ratio < 0.45:
         notes.append("Left a lot of the answer window unused.")
 

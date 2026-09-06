@@ -83,6 +83,7 @@ export async function aiEvaluateAnswer(body: {
   candidate_answer: string;
   speech_meta?: Record<string, unknown>;
   voice_meta?: Record<string, unknown>;
+  video_meta?: Record<string, unknown>;
 }): Promise<{
   correctness_score: number;
   confidence_score: number;
@@ -151,6 +152,8 @@ export type VideoMeta = {
   face_detected_ratio: number;
   eye_contact_score: number | null;
   presence_score: number | null;
+  expressiveness?: number | null;
+  composure?: number | null;
   face_area_ratio_avg?: number;
   frames_sampled?: number;
   /** base64 JPEG poster frame */

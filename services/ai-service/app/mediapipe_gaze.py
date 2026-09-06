@@ -133,9 +133,12 @@ def iris_gaze_score_from_landmarks(lm, frame_w: int, frame_h: int) -> FrameGazeM
     iris_score = float(max(0.0, min(100.0, 100.0 * (1.0 - min(1.0, combined * 2.75)))))
 
     facing = facing_camera_score_from_pts(pts)
-    # Must satisfy both iris-at-lens and head frontal; min() stops "steady but not looking" inflation
-    geom = float(np.sqrt(max(iris_score, 1.0) * max(facing, 6.0)))
-    gaze = float(max(0.0, min(100.0, 0.42 * min(iris_score, facing) + 0.58 * geom)))
+    # Eye contact needs the head pointed at the lens AND the iris centred in the eye.
+    # Neither substitutes for the other, so they multiply rather than average: an iris
+    # sitting centrally in its socket while the head is turned away is looking at
+    # whatever the head is pointed at, not at the camera. A geometric mean was letting
+    # a centred iris rescue a turned head and inflate the score.
+    gaze = float(np.clip((iris_score / 100.0) * (facing / 100.0) * 100.0, 0.0, 100.0))
 
     # Face bbox from all mesh points (468 face + iris)
     xs = [pts[i].x for i in range(min(478, len(pts)))]
@@ -200,6 +203,8 @@ def try_create_face_landmarker():
                 base_options=mp_python.BaseOptions(model_asset_path=str(model)),
                 running_mode=vision.RunningMode.VIDEO,
                 num_faces=1,
+                # Blendshapes feed the facial-expression side of the confidence score.
+                output_face_blendshapes=True,
                 min_face_detection_confidence=0.45,
                 min_tracking_confidence=0.45,
             )

@@ -51,6 +51,7 @@ class EvaluateBody(BaseModel):
     candidate_answer: str
     speech_meta: dict[str, Any] | None = None
     voice_meta: dict[str, Any] | None = None
+    video_meta: dict[str, Any] | None = None
 
 class LLMCorrectnessResult(BaseModel):
     correctness_score: float = Field(description="Score between 0 and 100")
@@ -258,7 +259,7 @@ async def evaluate_answer(body: EvaluateBody):
         except (TypeError, ValueError):
             pass
 
-    confidence, voice_breakdown, behavioral_context = confidence_from_voice(voice)
+    confidence, voice_breakdown, behavioral_context = confidence_from_voice(voice, body.video_meta)
 
     filler_rate = float(voice.get("filler_rate") or 0.0)
     word_count = float(voice.get("word_count") or 0.0)
@@ -311,6 +312,8 @@ async def evaluate_answer(body: EvaluateBody):
             "lead_in_seconds": voice.get("lead_in_seconds"),
             "energy_mean": voice.get("energy_mean"),
             "energy_cv": voice.get("energy_cv"),
+            "expressiveness": (body.video_meta or {}).get("expressiveness"),
+            "composure": (body.video_meta or {}).get("composure"),
             "voice_breakdown": voice_breakdown,
             "delivery_notes": behavioral_context,
         }

@@ -667,6 +667,8 @@ async function processInterview(interviewId: string): Promise<void> {
           evaluation_rubric: (q.evaluationRubric as Record<string, unknown>) || {},
           candidate_answer: transcript,
           voice_meta: voiceMeta,
+          // Facial expression feeds the confidence score when the answer was on camera.
+          video_meta: videoMeta ?? undefined,
         });
         correctness = ev.correctness_score;
         confidence = ev.confidence_score;
