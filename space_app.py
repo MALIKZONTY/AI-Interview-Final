@@ -51,10 +51,46 @@ def build_app():
     return gr.mount_gradio_app(api, page, path="/ui")
 
 
-# Hugging Face's launcher already owns port 7860 and imports this file to find the
-# app to serve; binding a second server here fails with "address already in use".
-# So expose the ASGI app under the names a launcher might look for, and never call
-# uvicorn ourselves.
+# Exposed under the names a launcher might look for, in case the platform imports
+# this file rather than executing it.
 app = build_app()
 application = app
 demo = app
+
+
+def _serve() -> None:
+    """
+    Run the server and block.
+
+    Hugging Face executes this file and expects the process to stay up; defining
+    the app and returning ends the container immediately. A redeploy can also leave
+    the previous process holding 7860 for a few seconds, which killed one earlier
+    attempt outright, so give the port a short while to come free before giving up.
+    """
+    import os
+    import socket
+    import time
+
+    import uvicorn
+
+    port = int(os.getenv("PORT", "7860"))
+    deadline = time.monotonic() + 60
+
+    while time.monotonic() < deadline:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("0.0.0.0", port))
+        except OSError:
+            print(f"port {port} still held by a previous process; retrying", flush=True)
+            time.sleep(3)
+            continue
+        finally:
+            probe.close()
+        break
+
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+
+
+if __name__ == "__main__":
+    _serve()
