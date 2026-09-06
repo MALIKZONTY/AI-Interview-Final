@@ -34,6 +34,7 @@ def _serve() -> None:
     mounting the FastAPI service onto the app it created puts both behind the one
     server: Gradio answers its own routes, everything else falls through to the API.
     """
+    import inspect
     import threading
 
     import gradio as gr
@@ -47,14 +48,24 @@ def _serve() -> None:
             "See `/docs` for the endpoints."
         )
 
-    # SSR would put a Node process in front of Python and hide the mounted routes.
-    page.launch(
-        server_name="0.0.0.0",
-        server_port=int(os.getenv("PORT", "7860")),
-        ssr_mode=False,
-        prevent_thread_lock=True,
-        show_api=False,
-    )
+    # Gradio's launch signature moves between majors — 6 dropped show_api, for
+    # instance — so pass only what this installed version actually accepts rather
+    # than crashing the Space on an unknown keyword.
+    wanted = {
+        "server_name": "0.0.0.0",
+        "server_port": int(os.getenv("PORT", "7860")),
+        # SSR puts a Node process in front of Python and hides the mounted routes.
+        "ssr_mode": False,
+        "prevent_thread_lock": True,
+        "show_api": False,
+        "quiet": True,
+    }
+    accepted = set(inspect.signature(page.launch).parameters)
+    kwargs = {k: v for k, v in wanted.items() if k in accepted}
+    dropped = sorted(set(wanted) - set(kwargs))
+    if dropped:
+        print(f"gradio {gr.__version__} does not accept: {', '.join(dropped)}", flush=True)
+    page.launch(**kwargs)
 
     # Mounted after launch because Gradio only builds its FastAPI app during it.
     page.app.mount("/", api)
