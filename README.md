@@ -1,7 +1,7 @@
 ---
 title: Evolve AI Interview
 emoji: 🚀
-colorFrom: sky
+colorFrom: blue
 colorTo: indigo
 sdk: gradio
 app_file: space_app.py
