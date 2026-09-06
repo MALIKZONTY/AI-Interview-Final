@@ -2,7 +2,11 @@
 #
 #   ai-interview-web   static Vite build
 #   ai-interview-api   Fastify API, Prisma against Neon, Supabase for recordings
-#   ai-interview-ai    Python service: Whisper, MediaPipe, Piper
+#
+# The Python AI service is NOT here. Whisper, MediaPipe and Piper together need
+# more memory than Render's free tier allows, and paying for that is avoidable:
+# a Hugging Face Space runs the same container free with far more headroom. The
+# root Dockerfile builds it. Point AI_SERVICE_URL at the Space.
 #
 # After the first deploy, set VITE_API_URL on the web service to the API's URL and
 # redeploy it — a static site bakes its env vars in at build time, and Render cannot
@@ -54,47 +58,10 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
-      # Full https URL of ai-interview-ai. Render cannot compose a scheme onto
-      # fromService's host:port, and axios needs one, so this is set by hand.
+      # Full https URL of the Hugging Face Space running the AI service,
+      # e.g. https://<user>-<space>.hf.space
       - key: AI_SERVICE_URL
         sync: false
-
-  # ---------------------------------------------------------------------------
-  # 3. Python AI service
-  # ---------------------------------------------------------------------------
-  # Needs more memory than the free tier gives: Whisper, MediaPipe and Piper all sit
-  # in RAM together. It also downloads roughly 300MB of model weights on first use,
-  # and repeats that after every restart unless a persistent disk is attached.
-  - type: web
-    name: ai-interview-ai
-    runtime: docker
-    plan: standard
-    dockerfilePath: ./services/ai-service/Dockerfile
-    dockerContext: ./services/ai-service
-    healthCheckPath: /health
-    envVars:
-      - key: OPENAI_API_KEY
+      # Shared secret the Space checks; leave unset on both sides to disable.
+      - key: AI_SERVICE_TOKEN
         sync: false
-      - key: OPENAI_BASE_URL
-        value: https://api.groq.com/openai/v1
-      # Must be a model the key can actually reach; the Llama ids are decommissioned.
-      - key: OPENAI_MODEL
-        value: openai/gpt-oss-20b
-      # Point the Hugging Face cache at the disk below; otherwise Whisper's weights
-      # sit on the ephemeral filesystem and download again after every restart.
-      - key: HF_HOME
-        value: /app/.models/hf
-      - key: WHISPER_MODEL_SIZE
-        value: base
-      - key: WHISPER_DEVICE
-        value: cpu
-      - key: WHISPER_COMPUTE_TYPE
-        value: int8
-      - key: CORS_ORIGINS
-        sync: false
-    disk:
-      # Keeps Whisper, Piper and the face landmarker across restarts. Without it the
-      # first request after every deploy pays for the download again.
-      name: models
-      mountPath: /app/.models
-      sizeGB: 2

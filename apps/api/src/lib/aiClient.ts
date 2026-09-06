@@ -2,6 +2,14 @@ import axios from "axios";
 
 const base = () => process.env.AI_SERVICE_URL ?? "http://localhost:8000";
 
+/**
+ * Shared secret for the AI service, which is reachable by anyone who knows its URL
+ * once it is hosted publicly. Unset locally, where the header is simply absent and
+ * the service does not ask for one.
+ */
+const serviceHeaders = (): Record<string, string> =>
+  process.env.AI_SERVICE_TOKEN ? { "x-service-token": process.env.AI_SERVICE_TOKEN } : {};
+
 export type GeneratedQuestion = {
   text: string;
   expected_answer: string;
@@ -24,7 +32,7 @@ export async function aiGenerateQuestions(params: {
       count: params.count ?? 20,
       difficulty: params.difficulty ?? "Medium",
     },
-    { timeout: 300_000 }
+    { timeout: 300_000, headers: serviceHeaders() }
   );
   return data.questions;
 }
@@ -61,7 +69,7 @@ export async function aiSpeechToText(
     `${base()}/speech-to-text`,
     form,
     {
-      headers: form.getHeaders(),
+      headers: { ...form.getHeaders(), ...serviceHeaders() },
       timeout: 300_000,
       maxBodyLength: Infinity,
       maxContentLength: Infinity,
@@ -93,7 +101,7 @@ export async function aiEvaluateAnswer(body: {
     correctness_score: number;
     confidence_score: number;
     debug?: Record<string, any>;
-  }>(`${base()}/evaluate-answer`, body, { timeout: 300_000 });
+  }>(`${base()}/evaluate-answer`, body, { timeout: 300_000, headers: serviceHeaders() });
   return data;
 }
 
@@ -105,7 +113,7 @@ export async function aiGenerateSummaryFeedback(body: {
   const { data } = await axios.post<{ summary: string }>(
     `${base()}/generate-summary-feedback`,
     body,
-    { timeout: 60_000 }
+    { timeout: 60_000, headers: serviceHeaders() }
   );
   return data.summary;
 }
@@ -139,7 +147,7 @@ export async function aiGenerateFollowUp(body: {
         difficulty: body.difficulty ?? "Medium",
         keywords: body.keywords ?? [],
       },
-      { timeout: 45_000 }
+      { timeout: 45_000, headers: serviceHeaders() }
     );
     return data;
   } catch (e) {
@@ -171,7 +179,7 @@ export async function aiAnalyzeVideo(videoBuffer: Buffer, mimeType: string): Pro
     const form = new FormData();
     form.append("file", videoBuffer, { filename: "answer.webm", contentType: mimeType });
     const { data } = await axios.post<VideoMeta>(`${base()}/analyze-video`, form, {
-      headers: form.getHeaders(),
+      headers: { ...form.getHeaders(), ...serviceHeaders() },
       timeout: 300_000,
       maxBodyLength: Infinity,
       maxContentLength: Infinity,
@@ -192,6 +200,7 @@ export async function aiSpeak(text: string): Promise<Buffer | null> {
     const res = await axios.post(`${base()}/speak`, { text }, {
       responseType: "arraybuffer",
       timeout: 60_000,
+      headers: serviceHeaders(),
       validateStatus: (s) => s === 200 || s === 204,
     });
     if (res.status === 204) return null;
