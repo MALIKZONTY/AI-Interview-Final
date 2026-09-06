@@ -15,6 +15,7 @@ export type ResultRow = {
     transcript: string | null;
     hasRecording?: boolean;
     hasThumbnail?: boolean;
+    isFollowUp?: boolean;
     recordingKind?: "audio" | "video";
     eyeContactScore?: number | null;
     correctnessScore: number | null;

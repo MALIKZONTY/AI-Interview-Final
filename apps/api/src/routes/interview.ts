@@ -23,6 +23,20 @@ const startSchema = z.object({
 /**
  * Interview lifecycle: start (generate 20 Qs), submit answer audio, process (AI), results & history.
  */
+/**
+ * How many of an interview's slots may be spent probing a previous answer.
+ *
+ * Follow-ups replace planned questions, so an unbounded supply crowds out the
+ * coverage the job description asked for — a ten-question interview could end up
+ * half follow-ups on one or two topics.
+ *
+ *   under 5 -> none    5-8 -> 1    9-12 -> 2    13-16 -> 3    17-20 -> 4
+ */
+function followUpBudget(numQuestions: number): number {
+  if (numQuestions < 5) return 0;
+  return Math.min(4, Math.floor((numQuestions - 1) / 4));
+}
+
 const interviewRoutes: FastifyPluginAsync = async (app) => {
   app.post("/start", { preHandler: [app.authenticate] }, async (request, reply) => {
     const parsed = startSchema.safeParse(request.body);
@@ -229,7 +243,12 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
         let text = planned.text;
         let isFollowUp = false;
 
-        if (transcript.trim()) {
+        const budget = followUpBudget(interview.numQuestions);
+        const spent = await prisma.question.count({
+          where: { interviewId, isFollowUp: true },
+        });
+
+        if (transcript.trim() && spent < budget) {
           const decision = await aiGenerateFollowUp({
             jdText: interview.jdText ?? "",
             question: q.text,
@@ -245,6 +264,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
               where: { id: planned.id },
               data: {
                 text: fu.text,
+                isFollowUp: true,
                 expectedAnswer: fu.expected_answer,
                 acceptableVariants: (fu.acceptable_variants || []) as Prisma.InputJsonValue,
                 keywords: (fu.keywords || []) as Prisma.InputJsonValue,
@@ -253,7 +273,9 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
             });
             text = fu.text;
             isFollowUp = true;
-            console.log(`[submit] Follow-up queued at #${nextIndex}: ${decision.reason ?? ""}`);
+            console.log(
+              `[submit] Follow-up ${spent + 1}/${budget} queued at #${nextIndex}: ${decision.reason ?? ""}`
+            );
           }
         }
 
@@ -445,6 +467,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
           recordingKind: String(((r as any)?.analysisMeta as any)?.mime_type || "").startsWith("video/")
             ? "video"
             : "audio",
+          isFollowUp: (q as any).isFollowUp ?? false,
           hasThumbnail: Boolean(((r as any)?.analysisMeta as any)?.video_meta?.thumb_url),
           eyeContactScore: ((r as any)?.analysisMeta as any)?.video_meta?.eye_contact_score ?? null,
           presenceScore: ((r as any)?.analysisMeta as any)?.video_meta?.presence_score ?? null,
@@ -518,6 +541,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
           recordingKind: String(((r as any)?.analysisMeta as any)?.mime_type || "").startsWith("video/")
             ? "video"
             : "audio",
+          isFollowUp: (q as any).isFollowUp ?? false,
           hasThumbnail: Boolean(((r as any)?.analysisMeta as any)?.video_meta?.thumb_url),
           eyeContactScore: ((r as any)?.analysisMeta as any)?.video_meta?.eye_contact_score ?? null,
           presenceScore: ((r as any)?.analysisMeta as any)?.video_meta?.presence_score ?? null,

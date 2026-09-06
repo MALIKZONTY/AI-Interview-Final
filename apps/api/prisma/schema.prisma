@@ -55,6 +55,8 @@ model Question {
   interviewId        String
   orderIndex         Int
   text               String
+  /// True when this slot was rewritten to probe the previous answer.
+  isFollowUp         Boolean   @default(false)
   expectedAnswer     String
   acceptableVariants Json?
   keywords           Json?
