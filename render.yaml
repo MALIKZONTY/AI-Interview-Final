@@ -19,7 +19,12 @@ services:
   - type: web
     name: ai-interview-web
     runtime: static
-    buildCommand: corepack enable && pnpm install --no-frozen-lockfile && pnpm --filter @interview/web build
+    # corepack is not guaranteed on the build image, so fall back to a global
+    # install. .nvmrc pins Node 20; Vite 6 needs 18 or newer.
+    buildCommand: >-
+      (corepack enable pnpm || npm install -g pnpm@9.14.2) &&
+      pnpm install --no-frozen-lockfile &&
+      pnpm --filter @interview/web build
     staticPublishPath: apps/web/dist
     envVars:
       # Full https URL of ai-interview-api, e.g. https://ai-interview-api.onrender.com
