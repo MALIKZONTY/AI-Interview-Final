@@ -117,7 +117,9 @@ _DIFFICULTY_RUBRIC = {
     - Test judgement: trade-offs, design, failure modes, debugging something genuinely awkward,
       decisions with no clean answer.
     - A good answer weighs options and justifies a choice.
-    - Experience-based questions are appropriate here.""",
+    - Experience-based questions are appropriate here.
+    - Find that difficulty inside the syllabus the source material set. Depth of reasoning
+      about the listed topics, never a jump to advanced topics it never mentioned.""",
 }
 
 
@@ -127,14 +129,30 @@ def _difficulty_rubric(level: str) -> str:
 
 # Same topic at three levels, so the model can see the gap rather than infer it.
 _DIFFICULTY_EXAMPLES = """
-    The SAME subject asked at each level, so you can see the difference. Source material
-    says "C programming basics":
-      EASY:   "What is a variable in C?"  /  "What is an array, and what would you use one for?"
-      MEDIUM: "How would you loop over an array in C to find the largest value?"
-      HARD:   "How would you track down a memory leak in a long-running C service?"
+    These are ILLUSTRATIONS of the gap between levels, in an unrelated subject. Never
+    reuse them, and never let their subject matter leak into your questions. Source
+    material of "basic HTML":
+      EASY:   "What is a heading tag in HTML?"
+      MEDIUM: "How would you structure a page with a header, a nav and a footer?"
+      HARD:   "How would you debug a layout that collapses only on mobile?"
 
-    Notice EASY never reaches pointers, memory or debugging. If the source material is basic,
-    the questions stay basic — do not reach for the hardest thing in the subject.
+    Notice the level changes how deeply you probe, not which topics you reach for.
+"""
+
+# Difficulty must not be used as licence to leave the syllabus the source material set.
+_SCOPE_RULE = """
+    STAY INSIDE THE STATED SCOPE:
+    The source material sets the syllabus. Phrases like "basics", "fundamentals",
+    "up to arrays", "entry level" or "introduction to" are hard boundaries.
+    - Never ask about a topic beyond that boundary, at ANY difficulty. If the material
+      says "up to arrays", then pointers, dynamic memory, threads and profilers are all
+      out of scope, and a HARD question must find its difficulty WITHIN arrays, loops
+      and functions — for example reasoning about an off-by-one in a loop over an array,
+      not tracking down a memory leak.
+    - Difficulty controls how hard you think about the listed topics, never how far
+      past them you reach.
+    - If the material is narrow, ask several angles on the same small set of topics.
+      That is correct behaviour, not a failure to find material.
 """
 
 
@@ -195,6 +213,7 @@ async def generate_questions(body: GenBody):
     Candidate's missing skills: {missing}.
 
     {_difficulty_rubric(body.difficulty)}
+    {_SCOPE_RULE}
     {_DIFFICULTY_EXAMPLES}
     The difficulty applies to `expected_answer` too. At EASY, the expected answer is the
     simple correct explanation a beginner would give — do not write a deep expert answer
