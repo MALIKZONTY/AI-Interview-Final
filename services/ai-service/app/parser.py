@@ -22,16 +22,31 @@ async def parse_resume_and_jd(resume_summary: str, jd_text: str) -> ParsedProfil
     """
     Parses the JD and Resume to extract structural data for question generation.
     """
+    # An interview is built from one source, so only one of these is usually present.
+    if jd_text.strip() and resume_summary.strip():
+        task = ("Analyze the Job Description and the candidate's Resume Summary. Extract the "
+                "skills required, the skills the candidate has, matches versus gaps, and their experience.")
+    elif jd_text.strip():
+        task = ("Analyze the Job Description. Extract the skills the role requires. Leave "
+                "candidate_skills, matched_skills, missing_skills, projects and experience empty — "
+                "there is no resume to compare against.")
+    else:
+        task = ("Analyze the candidate's Resume Summary. Extract their skills into both "
+                "required_skills and candidate_skills, and summarise their projects and experience. "
+                "Leave matched_skills and missing_skills empty — there is no job description "
+                "to compare against.")
+
+    sections = []
+    if jd_text.strip():
+        sections.append(f"# Job Description:\n{jd_text}")
+    if resume_summary.strip():
+        sections.append(f"# Candidate Resume Summary:\n{resume_summary}")
+
     prompt = f"""
 You are an expert technical recruiter and interviewer.
-Analyze the following Job Description (JD) and the candidate's Resume Summary.
-Extract the skills required, skills the candidate has, identify matches vs gaps, and summarize their experience.
+{task}
 
-# Job Description:
-{jd_text}
-
-# Candidate Resume Summary:
-{resume_summary}
+{chr(10).join(sections)}
 """
     try:
         completion = await client.chat.completions.create(

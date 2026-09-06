@@ -14,8 +14,14 @@ import {
   aiGenerateSummaryFeedback,
 } from "../lib/aiClient.js";
 
+/**
+ * An interview is built from one source, never both: either the job description
+ * the candidate is preparing for, or their own resume. Mixing them produced
+ * questions that drifted between the two.
+ */
 const startSchema = z.object({
-  jdText: z.string().min(10, "Job description is too short"),
+  source: z.enum(["resume", "jd"]),
+  jdText: z.string().optional(),
   numQuestions: z.number().int().min(1).max(20),
   difficulty: z.enum(["Easy", "Medium", "Hard"]).optional().default("Medium"),
 });
@@ -37,22 +43,43 @@ function followUpBudget(numQuestions: number): number {
   return Math.min(4, Math.floor((numQuestions - 1) / 4));
 }
 
+/** Resume text, used as role context when an interview was built from a resume. */
+async function resumeContextFor(userId: string): Promise<string> {
+  const resume = await prisma.resume.findUnique({ where: { userId } });
+  return ((resume as any)?.contentText || "").slice(0, 4000);
+}
+
 const interviewRoutes: FastifyPluginAsync = async (app) => {
   app.post("/start", { preHandler: [app.authenticate] }, async (request, reply) => {
     const parsed = startSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ error: "Invalid body", details: parsed.error.flatten() });
     }
-    const { jdText, numQuestions, difficulty } = parsed.data;
+    const { source, numQuestions, difficulty } = parsed.data;
+    const jdText = (parsed.data.jdText ?? "").trim();
 
     const resume = await prisma.resume.findUnique({ where: { userId: request.userId } });
-    const resumeSummary = (resume as any)?.contentText || "";
+    const resumeSummary = ((resume as any)?.contentText || "").trim();
+
+    // Whichever source was chosen has to actually carry something to work from.
+    if (source === "jd" && jdText.length < 10) {
+      return reply
+        .status(400)
+        .send({ error: "Paste a job description of at least 10 characters to start." });
+    }
+    if (source === "resume" && resumeSummary.length < 40) {
+      return reply.status(400).send({
+        error: resume
+          ? "No readable text could be extracted from your resume. Try re-uploading it as a text-based PDF."
+          : "Upload a resume before starting a resume-based interview.",
+      });
+    }
 
     let generated;
     try {
       generated = await aiGenerateQuestions({
-        resumeSummary: resumeSummary || "No resume text found; generate based on JD only.",
-        jdText,
+        resumeSummary: source === "resume" ? resumeSummary : "",
+        jdText: source === "jd" ? jdText : "",
         count: numQuestions,
         difficulty,
       });
@@ -250,7 +277,7 @@ const interviewRoutes: FastifyPluginAsync = async (app) => {
 
         if (transcript.trim() && spent < budget) {
           const decision = await aiGenerateFollowUp({
-            jdText: interview.jdText ?? "",
+            jdText: interview.jdText || (await resumeContextFor(request.userId)),
             question: q.text,
             candidateAnswer: transcript,
             plannedNext: planned.text,

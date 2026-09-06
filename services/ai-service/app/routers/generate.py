@@ -105,26 +105,52 @@ async def generate_questions(body: GenBody):
     # 3. Use LLM to generate targeted questions
     model_name = os.getenv("OPENAI_MODEL", "openai/gpt-oss-20b")
     
+    # An interview is built from one source, so the prompt must not reference the other.
+    jd = (body.jd_text or "").strip()
+    resume_text = (body.resume_summary or "").strip()
+
+    if jd:
+        source_block = f"JOB DESCRIPTION:\n    {jd}"
+        source_rule = """CRITICAL CONSTRAINT:
+    Only generate questions directly relevant to the specific role and industry in the JOB DESCRIPTION.
+    - If the role is technical (e.g. Software Engineer), ask technical questions.
+    - If it is non-technical (e.g. Cricket Coach, Sales, Management), ask questions specific to that field.
+    - DO NOT default to general software architecture or coding questions unless the role calls for them.
+    - You have NOT seen this candidate's resume. Never imply you know their background: ask
+      "How would you..." or "When would you...", never "I saw you worked on...".
+    """
+        mix = """Generate a balanced mix of:
+    1. Core responsibilities named in the job description.
+    2. Scenario questions someone in this role would actually face.
+    3. Behavioural questions suited to the seniority and team context described.
+    """
+    else:
+        source_block = f"CANDIDATE RESUME:\n    {resume_text}"
+        source_rule = """CRITICAL CONSTRAINT:
+    Only generate questions grounded in what the RESUME actually says.
+    - Interview them about their own work: the projects, tools, roles and results they listed.
+    - Match the field the resume is in. A cricket coach's resume gets coaching questions, not software ones.
+    - There is NO job description. Do not invent role requirements or ask about a target position.
+    - Never ask about a technology or skill the resume does not mention.
+    """
+        mix = """Generate a balanced mix of:
+    1. Deep-dives into specific projects and achievements the resume lists.
+    2. The tools, skills and methods they claim, probing real depth rather than name recognition.
+    3. Behavioural questions drawn from the roles and responsibilities on the resume.
+    """
+
     system_prompt = f"""
-    You are an expert interviewer. 
-    You are interviewing this candidate. Questions come STRICTLY from the Job Description
-    and Resume below. You are asked for a few at a time; the exact number is in the user message.
-    
-    JOB DESCRIPTION:
-    {body.jd_text}
-    
-    CANDIDATE RESUME:
-    {body.resume_summary}
-    
+    You are an expert interviewer.
+    Questions come STRICTLY from the single source below. You are asked for a few at a
+    time; the exact number is in the user message.
+
+    {source_block}
+
     Target difficulty: {body.difficulty}.
     Candidate's matched skills: {matched}.
     Candidate's missing skills: {missing}.
-    
-    CRITICAL CONSTRAINT: 
-    Only generate questions that are directly relevant to the specific role and industry described in the JOB DESCRIPTION. 
-    - If the JD is technical (e.g. Software Engineer), ask technical questions. 
-    - If the JD is non-technical (e.g. Cricket Coach, Sales, Management), ask questions specific to that field. 
-    - DO NOT default to general software architecture or coding questions (like Microservices vs Monolith) unless they are explicitly relevant to the role.
+
+    {source_rule}
     
     HOW TO PHRASE THE QUESTION TEXT — THIS MATTERS AS MUCH AS THE CONTENT:
     Every `text` value is READ ALOUD to the candidate by a voice. Write what a real
@@ -157,10 +183,7 @@ async def generate_questions(body: GenBody):
       BAD:  "Discuss a challenging situation, how you resolved it, and what you learned."
       GOOD: "Tell me about a time something broke in production. What did you do first?"
 
-    Generate a balanced mix of:
-    1. JD-Specific Questions: Based strictly on the roles and responsibilities in the job description.
-    2. Resume-Specific Questions: Deep-dive into the candidate's listed projects, past work experience, and specific skills found in their resume summary.
-    3. Behavioral & Scenario Questions: Based on the intersection of the role and the candidate's background.
+    {mix}
 
     The `text` field is the spoken question and must follow the phrasing rules above.
     The `expected_answer`, `keywords` and `evaluation_rubric` are for scoring only, are never

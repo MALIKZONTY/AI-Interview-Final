@@ -1,12 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  FileText, History, Loader2, Play, Upload,
-  Calendar, Target, TrendingUp, ChevronRight,
-  Zap, BrainCircuit, LayoutDashboard,
-  ShieldCheck, AlertCircle, Sparkles, UserCircle,
-  ArrowRight
-} from "lucide-react";
+import { AlertCircle, ArrowRight, BrainCircuit, Calendar, CheckCircle2, ChevronRight, FileText, History, LayoutDashboard, Loader2, Play, ShieldAlert, ShieldCheck, Sparkles, Target, TrendingUp, Upload, UserCircle, Zap } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -48,6 +42,8 @@ export function DashboardPage() {
   const [resume, setResume] = useState<ResumeRow | null | undefined>(undefined);
   const [resumeLoading, setResumeLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  /** An interview is built from one source, never both. */
+  const [source, setSource] = useState<"jd" | "resume">("jd");
   const [jdText, setJdText] = useState("");
   const [numQuestions, setNumQuestions] = useState(5);
   const [difficulty, setDifficulty] = useState("Medium");
@@ -123,21 +119,34 @@ export function DashboardPage() {
 
   async function startInterview() {
     setError(null);
-    if (jdText.trim().length < 10) {
+
+    if (source === "jd" && jdText.trim().length < 10) {
       setError("Please provide a Job Description (at least 10 characters).");
       return;
     }
+    if (source === "resume" && !resume) {
+      setError("Upload a resume first, or switch to a job description.");
+      return;
+    }
+
     setStarting(true);
     try {
-      await api.post("/upload/jd", { text: jdText });
+      if (source === "jd") {
+        await api.post("/upload/jd", { text: jdText });
+      }
       const { data } = await api.post<{
         interviewId: string;
         questions: { id: string; orderIndex: number; text: string }[];
-      }>("/interview/start", { jdText, numQuestions, difficulty });
+      }>("/interview/start", {
+        source,
+        jdText: source === "jd" ? jdText : undefined,
+        numQuestions,
+        difficulty,
+      });
       setSession({
         interviewId: data.interviewId,
         questions: data.questions,
-        jdText,
+        jdText: source === "jd" ? jdText : "",
         numQuestions,
       });
       navigate("/interview/prep");
@@ -284,22 +293,96 @@ export function DashboardPage() {
             {/* Right Segment: Job Details */}
             <Card className="lg:col-span-8 border-border bg-card shadow-sm rounded-3xl overflow-hidden flex flex-col">
               <CardHeader className="p-10 pb-6 border-b border-border bg-muted/10">
-                <div className="flex justify-between items-center">
+                <div className="space-y-8">
                   <div className="space-y-1">
-                    <h3 className="text-2xl font-bold tracking-tight text-foreground">Job Description</h3>
-                    <p className="text-[10px] font-bold text-primary uppercase tracking-widest">Role Specification</p>
+                    <h3 className="text-2xl font-bold tracking-tight text-foreground">Interview Source</h3>
+                    <p className="text-[10px] font-bold text-primary uppercase tracking-widest">
+                      Choose one — questions come from this alone
+                    </p>
                   </div>
-                  <Badge variant="outline" className="h-8 border-border px-4 rounded-full text-[10px] font-bold tracking-widest uppercase bg-background">Ready to Process</Badge>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <button
+                      type="button"
+                      onClick={() => setSource("jd")}
+                      className={`rounded-2xl border-2 p-5 text-left transition-all ${
+                        source === "jd"
+                          ? "border-primary bg-primary/5 shadow-sm"
+                          : "border-border bg-muted/10 hover:border-primary/30"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-bold uppercase tracking-widest text-foreground">
+                          Job Description
+                        </span>
+                        {source === "jd" && <CheckCircle2 className="h-4 w-4 text-primary" />}
+                      </div>
+                      <p className="text-[11px] font-medium text-muted-foreground leading-relaxed">
+                        Questions about a role you are targeting.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSource("resume")}
+                      className={`rounded-2xl border-2 p-5 text-left transition-all ${
+                        source === "resume"
+                          ? "border-primary bg-primary/5 shadow-sm"
+                          : "border-border bg-muted/10 hover:border-primary/30"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-bold uppercase tracking-widest text-foreground">
+                          My Resume
+                        </span>
+                        {source === "resume" && <CheckCircle2 className="h-4 w-4 text-primary" />}
+                      </div>
+                      <p className="text-[11px] font-medium text-muted-foreground leading-relaxed">
+                        Questions about your own projects and experience.
+                      </p>
+                    </button>
+                  </div>
                 </div>
               </CardHeader>
 
               <CardContent className="p-10 space-y-10 flex-1">
-                <textarea
-                  className="flex min-h-[180px] w-full rounded-2xl border border-border bg-muted/20 px-8 py-6 text-base font-medium placeholder:text-muted-foreground/30 focus:bg-background focus:border-primary/40 focus:ring-4 focus:ring-primary/5 transition-all resize-none shadow-sm"
-                  placeholder="Paste the target job description here..."
-                  value={jdText}
-                  onChange={(e) => setJdText(e.target.value)}
-                />
+                {source === "jd" ? (
+                  <textarea
+                    className="flex min-h-[180px] w-full rounded-2xl border border-border bg-muted/20 px-8 py-6 text-base font-medium placeholder:text-muted-foreground/30 focus:bg-background focus:border-primary/40 focus:ring-4 focus:ring-primary/5 transition-all resize-none shadow-sm"
+                    placeholder="Paste the target job description here..."
+                    value={jdText}
+                    onChange={(e) => setJdText(e.target.value)}
+                  />
+                ) : (
+                  <div className="min-h-[180px] rounded-2xl border border-border bg-muted/20 px-8 py-6 flex flex-col justify-center gap-3 shadow-sm">
+                    {resume ? (
+                      <>
+                        <div className="flex items-center gap-3 text-primary">
+                          <CheckCircle2 className="h-5 w-5" />
+                          <span className="text-xs font-bold uppercase tracking-widest">
+                            {resume.fileName || "Resume ready"}
+                          </span>
+                        </div>
+                        <p className="text-sm font-medium text-muted-foreground leading-relaxed">
+                          Questions will come from the projects, skills and experience in this
+                          document. No job description is used.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-3 text-destructive">
+                          <ShieldAlert className="h-5 w-5" />
+                          <span className="text-xs font-bold uppercase tracking-widest">
+                            No resume uploaded
+                          </span>
+                        </div>
+                        <p className="text-sm font-medium text-muted-foreground leading-relaxed">
+                          Upload one in the panel on the left, or switch to a job description.
+                        </p>
+                      </>
+                    )}
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
                   <div className="space-y-4">
@@ -334,7 +417,7 @@ export function DashboardPage() {
                 <Button
                   className="w-full h-16 rounded-2xl bg-primary hover:bg-primary/90 text-primary-foreground text-base font-bold gap-3 shadow-lg shadow-primary/20 transition-all active:scale-[0.98] mt-2 group"
                   onClick={() => void startInterview()}
-                  disabled={starting}
+                  disabled={starting || (source === "resume" && !resume)}
                 >
                   {starting ? (
                     <div className="flex items-center gap-3">
