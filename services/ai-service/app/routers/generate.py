@@ -93,6 +93,51 @@ async def _generate_batch(
         return []
 
 
+# What each difficulty actually means. Without this the model reads "Easy" as
+# "an easy question for a professional" and asks a beginner about pointers.
+_DIFFICULTY_RUBRIC = {
+    "easy": """DIFFICULTY: EASY — aimed at a student or someone who has just learned this topic.
+    - Test recall and understanding: what something IS, what it is FOR, basic vocabulary.
+    - A good answer is two or three sentences from someone who took a course and paid attention.
+    - Use openers like "What is...", "What does ... mean", "Can you explain what ... does".
+    - Do NOT ask about trade-offs, design decisions, performance, edge cases or internals.
+    - Do NOT ask "tell me about a time you..." — a student has no professional stories, and
+      asking for one guarantees an empty answer no matter how well they know the subject.
+    - Stay on the foundational concepts of the subject, not its advanced corners.""",
+
+    "medium": """DIFFICULTY: MEDIUM — aimed at someone who has actually used this in practice.
+    - Test application: how they would use it, when they would choose one option over another,
+      how they would approach a straightforward, concrete situation.
+    - A good answer shows hands-on familiarity, not just a memorised definition.
+    - Use openers like "How would you...", "When would you use ... over ...", "Walk me through...".
+    - Light experience questions are fine, but keep an answerable hypothetical available.
+    - Avoid deep architecture, scaling and obscure failure modes.""",
+
+    "hard": """DIFFICULTY: HARD — aimed at an experienced practitioner.
+    - Test judgement: trade-offs, design, failure modes, debugging something genuinely awkward,
+      decisions with no clean answer.
+    - A good answer weighs options and justifies a choice.
+    - Experience-based questions are appropriate here.""",
+}
+
+
+def _difficulty_rubric(level: str) -> str:
+    return _DIFFICULTY_RUBRIC.get((level or "medium").strip().lower(), _DIFFICULTY_RUBRIC["medium"])
+
+
+# Same topic at three levels, so the model can see the gap rather than infer it.
+_DIFFICULTY_EXAMPLES = """
+    The SAME subject asked at each level, so you can see the difference. Source material
+    says "C programming basics":
+      EASY:   "What is a variable in C?"  /  "What is an array, and what would you use one for?"
+      MEDIUM: "How would you loop over an array in C to find the largest value?"
+      HARD:   "How would you track down a memory leak in a long-running C service?"
+
+    Notice EASY never reaches pointers, memory or debugging. If the source material is basic,
+    the questions stay basic — do not reach for the hardest thing in the subject.
+"""
+
+
 @router.post("/generate-questions", response_model=GenResponse)
 async def generate_questions(body: GenBody):
     # 1. Structured preprocessing - Parse JD & Resume
@@ -146,9 +191,14 @@ async def generate_questions(body: GenBody):
 
     {source_block}
 
-    Target difficulty: {body.difficulty}.
     Candidate's matched skills: {matched}.
     Candidate's missing skills: {missing}.
+
+    {_difficulty_rubric(body.difficulty)}
+    {_DIFFICULTY_EXAMPLES}
+    The difficulty applies to `expected_answer` too. At EASY, the expected answer is the
+    simple correct explanation a beginner would give — do not write a deep expert answer
+    and then mark a correct beginner answer down against it.
 
     {source_rule}
     
@@ -355,8 +405,12 @@ async def generate_followup(body: FollowUpBody):
 
     Prefer moving on when it is a close call. A good interview covers ground.
 
-    The follow-up must reference something concrete the candidate actually said, be answerable
-    in about 30 seconds of speech, and target difficulty {body.difficulty}.
+    The follow-up must reference something concrete the candidate actually said and be
+    answerable in about 30 seconds of speech.
+
+    {_difficulty_rubric(body.difficulty)}
+    A follow-up must not be harder than the level above. Probing an easy answer means asking
+    them to say a little more about the same basic idea, not stepping up to internals.
 
     PHRASING — the question is READ ALOUD, so write what an interviewer would SAY:
     - One idea, under 35 spoken words, ending in a single question mark.
