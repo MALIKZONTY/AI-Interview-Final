@@ -47,16 +47,14 @@ def build_app():
         return api
     import gradio as gr  # noqa: PLC0415
 
-    # Mount the UI onto the FastAPI app so both share port 7860.
+    # Mount the UI onto the FastAPI app so both are served by one ASGI app.
     return gr.mount_gradio_app(api, page, path="/ui")
 
 
-application = build_app()
-
-
-if __name__ == "__main__":
-    import os
-
-    import uvicorn
-
-    uvicorn.run(application, host="0.0.0.0", port=int(os.getenv("PORT", "7860")))
+# Hugging Face's launcher already owns port 7860 and imports this file to find the
+# app to serve; binding a second server here fails with "address already in use".
+# So expose the ASGI app under the names a launcher might look for, and never call
+# uvicorn ourselves.
+app = build_app()
+application = app
+demo = app
