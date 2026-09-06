@@ -73,8 +73,10 @@ git add -A
 git -c user.email=deploy@local -c user.name=deploy commit -q \
   -m "Deploy AI service from $(cd "$REPO_ROOT" && git rev-parse --short HEAD)"
 
+# Never echo the URL itself: it may carry a token when passed via SPACE_URL.
+SAFE_URL="$(printf '%s' "$SPACE_URL" | sed -E 's#//[^@/]+@#//#')"
 echo
-echo "Pushing to $SPACE_URL"
+echo "Pushing to $SAFE_URL"
 echo "  username: your Hugging Face account name"
 echo "  password: a WRITE token, not your account password"
 echo
