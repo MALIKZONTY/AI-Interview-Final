@@ -43,16 +43,24 @@ for f in "${FILES[@]}" "${EXTRA_FILES[@]}"; do
   [[ -f "$f" ]] || { echo "Missing required file: $f" >&2; exit 1; }
 done
 
-# The root list is a copy of the service's, not an include of it — Hugging Face
-# installs it in a stage where the service directory does not exist. Copies drift,
-# so refuse to deploy when the two disagree on actual requirement lines.
+# The root list is a deliberate subset of the service's, not an include of it —
+# Hugging Face installs it in a stage where the service directory does not exist.
+# Every line it does carry must still match, so a version bump made in one place
+# cannot silently ship a different one to the Space.
 strip_comments() { grep -vE '^\s*(#|$)' "$1" | sed 's/[[:space:]]*$//' | sort; }
-if ! diff -q <(strip_comments requirements.txt) \
-             <(strip_comments services/ai-service/requirements.txt) >/dev/null; then
-  echo "requirements.txt and services/ai-service/requirements.txt have diverged:" >&2
-  diff <(strip_comments services/ai-service/requirements.txt) \
-       <(strip_comments requirements.txt) >&2 || true
+EXTRA="$(comm -13 <(strip_comments services/ai-service/requirements.txt) \
+                  <(strip_comments requirements.txt))"
+if [[ -n "$EXTRA" ]]; then
+  echo "requirements.txt has entries the service list does not:" >&2
+  echo "$EXTRA" >&2
   exit 1
+fi
+OMITTED="$(comm -23 <(strip_comments services/ai-service/requirements.txt) \
+                    <(strip_comments requirements.txt))"
+if [[ -n "$OMITTED" ]]; then
+  echo "Space build omits (intentional, keeps the image small):"
+  echo "$OMITTED" | sed 's/^/  - /'
+  echo
 fi
 
 STAGE="$(mktemp -d)"

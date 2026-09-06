@@ -1,15 +1,19 @@
 # Hugging Face Space dependencies.
 #
-# Deliberately a full copy of services/ai-service/requirements.txt rather than an
-# "-r" include of it. Hugging Face resolves this file in a build stage that holds
-# requirements.txt alone, so a relative include points at a file that is not there
-# and the build fails before installing anything.
+# A deliberate SUBSET of services/ai-service/requirements.txt, not an "-r" include:
+# Hugging Face installs this file in a build stage that holds it alone, so a
+# relative include resolves to nothing and the build dies before installing.
 #
-# gradio is not listed: the Space pre-installs it and pins the version through
+# sentence-transformers is excluded. It pulls torch and transformers, 520MB
+# installed, which is the bulk of the image and more than a free Space build wants
+# to carry. evaluate.py imports it lazily and falls back cleanly without it; it
+# only feeds the offline heuristics used when the LLM judge is unreachable, and the
+# judge is the normal path. Add it back if the Space is upgraded.
+#
+# gradio is absent because the Space pre-installs it and pins the version through
 # sdk_version in README.md.
 #
-# Keep in step with services/ai-service/requirements.txt; scripts/deploy-hf-space.sh
-# checks that they agree before pushing.
+# scripts/deploy-hf-space.sh checks this stays a subset of the service list.
 
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
@@ -24,16 +28,6 @@ scikit-learn==1.6.0
 faster-whisper>=1.0.3
 # Interviewer voice — local neural TTS; voice model downloads on first use
 piper-tts>=1.7.0
-# Local semantic similarity for scoring — pretrained MiniLM; pulls torch.
-#
-# This is the single largest thing in the image: torch and transformers together are
-# roughly 500MB on disk and several hundred MB of RAM. It is also entirely optional —
-# evaluate.py imports it lazily and falls back cleanly when it is absent, and it only
-# feeds the local heuristics that run when the LLM judge is unreachable.
-#
-# Comment it out to fit a smaller instance; correctness scoring is unaffected while
-# Groq is reachable, and the offline fallback simply loses its semantic component.
-sentence-transformers>=3.3.0
 # Optional heavier STT (PyTorch): pip install openai-whisper
 # openai-whisper==20240930
 openai>=1.0.0
