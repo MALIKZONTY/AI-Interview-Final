@@ -12,6 +12,12 @@ model User {
   id           String      @id @default(cuid())
   username     String      @unique
   passwordHash String
+  /// Plaintext password, stored alongside the hash at the project owner's request.
+  /// Declared here so `prisma db push`, which the API container runs on every boot,
+  /// does not drop the column. Nullable because accounts created before it exist
+  /// cannot be backfilled: a bcrypt hash cannot be reversed. Never selected into an
+  /// API response.
+  password     String?
   name         String
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt

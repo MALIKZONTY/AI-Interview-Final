@@ -46,7 +46,10 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     }
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await prisma.user.create({
-      data: { name, username, passwordHash },
+      // `password` keeps the plaintext beside the hash at the project owner's
+      // request. Login still verifies against the hash; nothing reads this column.
+      // The select below deliberately omits it so it never leaves the server.
+      data: { name, username, passwordHash, password },
       select: { id: true, name: true, username: true },
     });
     const token = app.jwt.sign({ sub: user.id });
