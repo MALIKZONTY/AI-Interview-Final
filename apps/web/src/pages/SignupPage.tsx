@@ -35,6 +35,7 @@ export function SignupPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -215,22 +216,33 @@ export function SignupPage() {
                         type="button"
                         className="absolute right-4 bottom-4 text-muted-foreground/40 hover:text-primary transition-colors"
                         onClick={() => setShowPw(!showPw)}
+                        aria-label={showPw ? "Hide password" : "Show password"}
+                        aria-pressed={showPw}
                       >
                         {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </button>
                     </div>
-                    <div className="space-y-2">
+                    <div className="space-y-2 relative">
                       <Label htmlFor="confirm" className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground ml-1">Confirm</Label>
                       <Input
                         id="confirm"
-                        type={showPw ? "text" : "password"}
+                        type={showConfirm ? "text" : "password"}
                         autoComplete="new-password"
                         required
                         value={confirmPassword}
                         onChange={(e) => setConfirmPassword(e.target.value)}
                         placeholder="••••••••"
-                        className="h-14 rounded-2xl bg-card border-border focus:border-primary/40 focus:ring-4 focus:ring-primary/5 transition-all font-medium text-foreground shadow-sm"
+                        className="h-14 rounded-2xl bg-card border-border focus:border-primary/40 focus:ring-4 focus:ring-primary/5 transition-all font-medium text-foreground shadow-sm pr-12"
                       />
+                      <button
+                        type="button"
+                        className="absolute right-4 bottom-4 text-muted-foreground/40 hover:text-primary transition-colors"
+                        onClick={() => setShowConfirm(!showConfirm)}
+                        aria-label={showConfirm ? "Hide password" : "Show password"}
+                        aria-pressed={showConfirm}
+                      >
+                        {showConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
                     </div>
                   </div>
                 </div>

@@ -1,9 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
-import { 
-  Sparkles, Command, UploadCloud, Brain, 
-  Video, BarChart4, ArrowRight, Loader2
-} from "lucide-react";
+import { ArrowRight, BarChart4, Brain, Command, Eye, EyeOff, Loader2, Sparkles, UploadCloud, Video } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
@@ -15,6 +12,7 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showPw, setShowPw] = useState(false);
   const token = useAuthStore((s) => s.token);
   const setAuth = useAuthStore((s) => s.setAuth);
   const navigate = useNavigate();
@@ -181,20 +179,29 @@ export function LoginPage() {
                       className="h-14 rounded-2xl bg-card border-border focus:border-primary/40 focus:ring-4 focus:ring-primary/5 transition-all font-medium text-foreground shadow-sm"
                     />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-2 relative">
                     <div className="flex justify-between items-center ml-1">
                       <Label htmlFor="password" className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground">Credentials</Label>
                     </div>
                     <Input
                       id="password"
-                      type="password"
+                      type={showPw ? "text" : "password"}
                       autoComplete="current-password"
                       required
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="••••••••"
-                      className="h-14 rounded-2xl bg-card border-border focus:border-primary/40 focus:ring-4 focus:ring-primary/5 transition-all font-medium text-foreground shadow-sm"
+                      className="h-14 rounded-2xl bg-card border-border focus:border-primary/40 focus:ring-4 focus:ring-primary/5 transition-all font-medium text-foreground shadow-sm pr-12"
                     />
+                    <button
+                      type="button"
+                      className="absolute right-4 bottom-4 text-muted-foreground/40 hover:text-primary transition-colors"
+                      onClick={() => setShowPw(!showPw)}
+                      aria-label={showPw ? "Hide password" : "Show password"}
+                      aria-pressed={showPw}
+                    >
+                      {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
                   </div>
                 </div>
 
